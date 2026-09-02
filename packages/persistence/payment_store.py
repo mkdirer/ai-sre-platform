@@ -24,6 +24,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from packages.config import Settings
 from packages.models.checkout import CheckoutStatus, PaymentRequest, StoredPayment
 from packages.persistence.database import Base, create_database_engine
+from packages.telemetry import TelemetryRuntime
 
 
 class IdempotencyConflict(Exception):
@@ -73,8 +74,11 @@ class SqlAlchemyPaymentStore:
         settings: Settings,
         *,
         engine: AsyncEngine | None = None,
+        telemetry: TelemetryRuntime | None = None,
     ) -> None:
         self._engine = engine or create_database_engine(settings)
+        if telemetry is not None:
+            telemetry.instrument_sqlalchemy_engine(self._engine)
         self._sessions = async_sessionmaker(
             self._engine,
             class_=AsyncSession,

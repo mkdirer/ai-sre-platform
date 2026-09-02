@@ -3,6 +3,11 @@ name: ai-sre-platform
 x-app-environment: &app-environment
   ENVIRONMENT: ${ENVIRONMENT:-development}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  SERVICE_VERSION: ${SERVICE_VERSION:-0.1.0}
+  TELEMETRY_ENABLED: ${TELEMETRY_ENABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  OTEL_EXPORT_TIMEOUT_SECONDS: ${OTEL_EXPORT_TIMEOUT_SECONDS:-2.0}
+  OTEL_BATCH_SCHEDULE_DELAY_MILLISECONDS: ${OTEL_BATCH_SCHEDULE_DELAY_MILLISECONDS:-500}
   OUTBOUND_HTTP_TIMEOUT_SECONDS: ${OUTBOUND_HTTP_TIMEOUT_SECONDS:-5.0}
   OUTBOUND_HTTP_MAX_ATTEMPTS: ${OUTBOUND_HTTP_MAX_ATTEMPTS:-2}
   OUTBOUND_HTTP_RETRY_BACKOFF_SECONDS: ${OUTBOUND_HTTP_RETRY_BACKOFF_SECONDS:-0.05}
@@ -16,7 +21,7 @@ x-database-environment: &database-environment
   DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3.0}
 
 x-demo-service: &demo-service
-  image: ai-sre-demo:stage01
+  image: ai-sre-demo:stage02
   init: true
   read_only: true
   tmpfs:
@@ -57,6 +62,76 @@ services:
       postgres:
         condition: service_healthy
 
+  tempo:
+    image: grafana/tempo:2.10.7
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3200/ready >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  loki:
+    image: grafana/loki:3.7.4
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ./observability/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3100/ready >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.153.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    read_only: true
+    volumes:
+      - ./observability/otel_collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "127.0.0.1:${OTEL_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTEL_HTTP_PORT:-4318}:4318"
+      - "127.0.0.1:${OTEL_HEALTH_PORT:-13133}:13133"
+    depends_on:
+      tempo:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/otelcol-contrib",
+          "validate",
+          "--config=/etc/otelcol-contrib/config.yaml",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   inventory-service:
     <<: *demo-service
     command:
@@ -67,6 +142,7 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
     environment:
       <<: *app-environment
       INVENTORY_SKU: ${INVENTORY_SKU:-widget-001}
@@ -97,6 +173,7 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
     environment:
       <<: [*app-environment, *database-environment]
     ports:
@@ -116,6 +193,7 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
     environment:
       <<: *app-environment
       INVENTORY_SERVICE_URL: http://inventory-service:8000
@@ -139,6 +217,7 @@ services:
       - 0.0.0.0
       - --port
       - "8000"
+      - --no-access-log
     environment:
       <<: *app-environment
       ORDER_SERVICE_URL: http://order-service:8000
@@ -149,5 +228,72 @@ services:
         condition: service_healthy
     healthcheck: *application-healthcheck
 
+  prometheus:
+    image: prom/prometheus:v3.13.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      gateway:
+        condition: service_started
+      order-service:
+        condition: service_started
+      inventory-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "/bin/promtool", "check", "ready", "--url=http://127.0.0.1:9090"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  grafana:
+    image: grafana/grafana:13.2.0
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:3000/api/health >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
 volumes:
   postgres-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:

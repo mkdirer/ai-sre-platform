@@ -10,6 +10,7 @@ from apps.demo.common.web import (
     ApiError,
     create_service_app,
     current_request_id,
+    get_telemetry,
     require_idempotency_key,
 )
 from apps.demo.order_service.clients import (
@@ -47,9 +48,20 @@ def create_app(
     """Build the order service with replaceable downstream clients."""
 
     resolved_settings = settings or Settings()
-    resolved_inventory_client = inventory_client or HttpInventoryClient(resolved_settings)
-    resolved_payment_client = payment_client or HttpPaymentClient(resolved_settings)
-    app = create_service_app(title="AI SRE Demo Order Service")
+    app = create_service_app(
+        title="AI SRE Demo Order Service",
+        service_name="order-service",
+        settings=resolved_settings,
+    )
+    telemetry = get_telemetry(app)
+    resolved_inventory_client = inventory_client or HttpInventoryClient(
+        resolved_settings,
+        telemetry=telemetry,
+    )
+    resolved_payment_client = payment_client or HttpPaymentClient(
+        resolved_settings,
+        telemetry=telemetry,
+    )
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

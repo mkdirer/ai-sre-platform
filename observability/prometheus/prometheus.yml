@@ -1,0 +1,18 @@
+global:
+  scrape_interval: 5s
+  scrape_timeout: 3s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: gateway
+    static_configs:
+      - targets: [gateway:8000]
+  - job_name: order-service
+    static_configs:
+      - targets: [order-service:8000]
+  - job_name: inventory-service
+    static_configs:
+      - targets: [inventory-service:8000]
+  - job_name: payment-service
+    static_configs:
+      - targets: [payment-service:8000]

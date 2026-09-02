@@ -26,7 +26,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     """Build the dependency-free inventory service."""
 
     resolved_settings = settings or Settings()
-    app = create_service_app(title="AI SRE Demo Inventory Service")
+    app = create_service_app(
+        title="AI SRE Demo Inventory Service",
+        service_name="inventory-service",
+        settings=resolved_settings,
+    )
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

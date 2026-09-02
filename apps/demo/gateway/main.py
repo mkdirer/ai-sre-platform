@@ -10,6 +10,7 @@ from apps.demo.common.web import (
     ApiError,
     create_service_app,
     current_request_id,
+    get_telemetry,
     require_idempotency_key,
 )
 from apps.demo.gateway.client import HttpOrderClient, OrderClient
@@ -41,8 +42,15 @@ def create_app(
     """Build the gateway without opening network connections at import time."""
 
     resolved_settings = settings or Settings()
-    resolved_order_client = order_client or HttpOrderClient(resolved_settings)
-    app = create_service_app(title="AI SRE Demo Gateway")
+    app = create_service_app(
+        title="AI SRE Demo Gateway",
+        service_name="gateway",
+        settings=resolved_settings,
+    )
+    resolved_order_client = order_client or HttpOrderClient(
+        resolved_settings,
+        telemetry=get_telemetry(app),
+    )
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

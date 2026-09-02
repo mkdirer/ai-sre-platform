@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, StringConstraints
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,14 @@ class Settings(BaseSettings):
 
     environment: Environment = Environment.DEVELOPMENT
     log_level: LogLevel = LogLevel.INFO
+    service_version: Annotated[
+        str,
+        StringConstraints(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9._-]+$"),
+    ] = "0.1.0"
+    telemetry_enabled: bool = False
+    otel_exporter_otlp_endpoint: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:4317")
+    otel_export_timeout_seconds: Annotated[float, Field(gt=0, le=10)] = 2.0
+    otel_batch_schedule_delay_milliseconds: Annotated[int, Field(ge=100, le=5_000)] = 500
     postgres_host: str = "127.0.0.1"
     postgres_port: Annotated[int, Field(ge=1, le=65_535)] = 5432
     postgres_db: str = "aisre"

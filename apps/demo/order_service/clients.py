@@ -12,6 +12,7 @@ from packages.models.checkout import (
     ReservationRequest,
     ReservationResponse,
 )
+from packages.telemetry import TelemetryRuntime
 
 
 class InventoryClient(Protocol):
@@ -49,6 +50,7 @@ class HttpInventoryClient:
         self,
         settings: Settings,
         *,
+        telemetry: TelemetryRuntime | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._client = ServiceHttpClient(
@@ -57,6 +59,7 @@ class HttpInventoryClient:
             timeout_seconds=settings.outbound_http_timeout_seconds,
             max_attempts=settings.outbound_http_max_attempts,
             retry_backoff_seconds=settings.outbound_http_retry_backoff_seconds,
+            telemetry=telemetry,
             transport=transport,
         )
 
@@ -86,6 +89,7 @@ class HttpPaymentClient:
         self,
         settings: Settings,
         *,
+        telemetry: TelemetryRuntime | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._client = ServiceHttpClient(
@@ -94,6 +98,7 @@ class HttpPaymentClient:
             timeout_seconds=settings.outbound_http_timeout_seconds,
             max_attempts=settings.outbound_http_max_attempts,
             retry_backoff_seconds=settings.outbound_http_retry_backoff_seconds,
+            telemetry=telemetry,
             transport=transport,
         )
 

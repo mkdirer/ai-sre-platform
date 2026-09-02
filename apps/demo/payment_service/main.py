@@ -1,7 +1,5 @@
 """Payment service and PostgreSQL persistence boundary."""
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Annotated, Protocol
 from uuid import UUID
 
@@ -11,6 +9,8 @@ from apps.demo.common.web import (
     ApiError,
     create_service_app,
     current_request_id,
+    get_telemetry,
+    register_shutdown_callback,
     require_idempotency_key,
 )
 from packages.config import Settings
@@ -53,15 +53,16 @@ def create_app(
     """Build the payment app with an injectable persistence store."""
 
     resolved_settings = settings or Settings()
-    resolved_store = store or SqlAlchemyPaymentStore(resolved_settings)
-
-    @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        yield
-        await resolved_store.close()
-
-    app = create_service_app(title="AI SRE Demo Payment Service")
-    app.router.lifespan_context = lifespan
+    app = create_service_app(
+        title="AI SRE Demo Payment Service",
+        service_name="payment-service",
+        settings=resolved_settings,
+    )
+    resolved_store = store or SqlAlchemyPaymentStore(
+        resolved_settings,
+        telemetry=get_telemetry(app),
+    )
+    register_shutdown_callback(app, resolved_store.close)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:

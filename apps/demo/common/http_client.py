@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 
 from apps.demo.common.web import IDEMPOTENCY_KEY_HEADER, REQUEST_ID_HEADER
 from packages.models.http import ErrorResponse
+from packages.telemetry import TelemetryRuntime, inject_trace_context
 
 ResponseModelT = TypeVar("ResponseModelT", bound=BaseModel)
 
@@ -33,6 +34,7 @@ class ServiceHttpClient:
         timeout_seconds: float,
         max_attempts: int,
         retry_backoff_seconds: float,
+        telemetry: TelemetryRuntime | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._service_name = service_name
@@ -40,6 +42,7 @@ class ServiceHttpClient:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._max_attempts = max_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
+        self._telemetry = telemetry
         self._transport = transport
 
     async def post_model(
@@ -57,11 +60,14 @@ class ServiceHttpClient:
             IDEMPOTENCY_KEY_HEADER: idempotency_key,
             REQUEST_ID_HEADER: request_id,
         }
+        inject_trace_context(headers)
         async with httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
             transport=self._transport,
         ) as client:
+            if self._telemetry is not None:
+                self._telemetry.instrument_httpx_client(client)
             for attempt in range(1, self._max_attempts + 1):
                 try:
                     response = await client.post(
@@ -108,6 +114,8 @@ class ServiceHttpClient:
                 timeout=self._timeout,
                 transport=self._transport,
             ) as client:
+                if self._telemetry is not None:
+                    self._telemetry.instrument_httpx_client(client)
                 response = await client.get("/health/ready")
         except httpx.RequestError:
             return False

@@ -7,7 +7,8 @@ TEST_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre_t
 LIVE_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
-	test-integration migrate compose-up compose-down compose-logs smoke compose-validate check
+	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
+	compose-validate check
 
 setup: sync
 
@@ -56,6 +57,9 @@ compose-logs:
 
 smoke:
 	$(UV) run python scripts/smoke_checkout.py
+
+smoke-observability:
+	$(UV) run python scripts/smoke_observability.py
 
 compose-validate:
 	$(COMPOSE) config --quiet
