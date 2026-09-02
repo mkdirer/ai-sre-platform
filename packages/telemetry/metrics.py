@@ -12,6 +12,7 @@ METRIC_LABEL_POLICY: dict[str, tuple[str, ...]] = {
     "demo_http_request_errors_total": ("service", "method", "route", "error_type"),
     "demo_http_request_duration_seconds": ("service", "method", "route"),
     "demo_http_requests_in_progress": ("service", "method"),
+    "demo_fault_enabled": ("service", "fault"),
 }
 _ALLOWED_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
 _ROUTE_PATTERN = re.compile(r"^/[A-Za-z0-9_./{}-]{0,127}$")
@@ -76,6 +77,13 @@ class HttpMetrics:
             METRIC_LABEL_POLICY["demo_http_requests_in_progress"],
             registry=self.registry,
         )
+        self._fault_enabled = Gauge(
+            "demo_fault_enabled",
+            "Whether an allowlisted deterministic demo fault is enabled.",
+            METRIC_LABEL_POLICY["demo_fault_enabled"],
+            registry=self.registry,
+        )
+        self.set_slow_database_fault(enabled=False)
 
     def begin(self, method: str) -> None:
         """Increment the bounded in-progress saturation signal."""
@@ -110,6 +118,14 @@ class HttpMetrics:
         """Render this service's isolated registry in Prometheus format."""
 
         return generate_latest(self.registry)
+
+    def set_slow_database_fault(self, enabled: bool) -> None:
+        """Expose the single Stage 03 fault through fixed-cardinality labels."""
+
+        self._fault_enabled.labels(
+            service=self.service_name,
+            fault="slow_database",
+        ).set(1 if enabled else 0)
 
 
 __all__ = [

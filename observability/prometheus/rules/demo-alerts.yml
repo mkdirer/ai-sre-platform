@@ -1,0 +1,27 @@
+groups:
+  - name: demo-checkout
+    interval: 5s
+    rules:
+      - alert: DemoPaymentHighLatency
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(demo_http_request_duration_seconds_bucket{
+                service="payment-service",
+                method="POST",
+                route="/payments"
+              }[20s])
+            )
+          ) > 2
+        for: 5s
+        labels:
+          severity: warning
+          service: payment-service
+          fault: slow_database
+        annotations:
+          summary: Payment service latency exceeds the local demo threshold
+          description: >-
+            Payment POST /payments p95 latency is {{ $value | humanizeDuration }}, above 2s
+            for 5s. Check whether the controlled slow_database fault is enabled.
+          runbook: Run the controlled slow_database scenario documented in README.md.

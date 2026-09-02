@@ -3,7 +3,7 @@
 from typing import Annotated, Protocol
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Header, Request
 
 from apps.demo.common.web import (
     ApiError,
@@ -13,6 +13,11 @@ from apps.demo.common.web import (
     register_shutdown_callback,
     require_idempotency_key,
 )
+from apps.demo.payment_service.faults import (
+    FaultControlDisabledError,
+    FaultControlUnauthorizedError,
+    SlowDatabaseFaultController,
+)
 from packages.config import Settings
 from packages.models.checkout import (
     IdempotencyKey,
@@ -20,6 +25,7 @@ from packages.models.checkout import (
     PaymentResponse,
     StoredPayment,
 )
+from packages.models.faults import FaultStateResponse, FaultUpdateRequest
 from packages.models.http import ErrorResponse, HealthResponse
 from packages.persistence import (
     IdempotencyConflict,
@@ -49,6 +55,7 @@ def create_app(
     settings: Settings | None = None,
     *,
     store: PaymentStore | None = None,
+    fault_controller: SlowDatabaseFaultController | None = None,
 ) -> FastAPI:
     """Build the payment app with an injectable persistence store."""
 
@@ -58,9 +65,15 @@ def create_app(
         service_name="payment-service",
         settings=resolved_settings,
     )
+    telemetry = get_telemetry(app)
     resolved_store = store or SqlAlchemyPaymentStore(
         resolved_settings,
-        telemetry=get_telemetry(app),
+        telemetry=telemetry,
+    )
+    resolved_fault_controller = fault_controller or SlowDatabaseFaultController.from_settings(
+        resolved_settings,
+        telemetry=telemetry,
+        state_callback=telemetry.metrics.set_slow_database_fault,
     )
     register_shutdown_callback(app, resolved_store.close)
 
@@ -94,6 +107,7 @@ def create_app(
         idempotency_key: Annotated[IdempotencyKey, Depends(require_idempotency_key)],
     ) -> PaymentResponse:
         try:
+            await resolved_fault_controller.inject_before_database()
             payment = await resolved_store.create_or_get(
                 payment_request,
                 idempotency_key=idempotency_key,
@@ -109,6 +123,51 @@ def create_app(
                 503, "persistence_unavailable", "payment persistence is unavailable"
             ) from error
         return _payment_response(payment, current_request_id(request))
+
+    def authorize_fault_control(token: str | None) -> None:
+        try:
+            resolved_fault_controller.authorize(token)
+        except FaultControlDisabledError as error:
+            raise ApiError(
+                403,
+                "fault_control_disabled",
+                "Fault control is disabled outside an explicitly allowed local environment",
+            ) from error
+        except FaultControlUnauthorizedError as error:
+            raise ApiError(
+                401,
+                "fault_control_unauthorized",
+                "A valid X-Fault-Control-Token header is required",
+            ) from error
+
+    @app.get(
+        "/internal/faults/slow-database",
+        response_model=FaultStateResponse,
+        responses={401: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+    )
+    async def get_slow_database_fault(
+        x_fault_control_token: Annotated[
+            str | None,
+            Header(alias="X-Fault-Control-Token"),
+        ] = None,
+    ) -> FaultStateResponse:
+        authorize_fault_control(x_fault_control_token)
+        return resolved_fault_controller.state()
+
+    @app.put(
+        "/internal/faults/slow-database",
+        response_model=FaultStateResponse,
+        responses={401: {"model": ErrorResponse}, 403: {"model": ErrorResponse}},
+    )
+    async def set_slow_database_fault(
+        update: FaultUpdateRequest,
+        x_fault_control_token: Annotated[
+            str | None,
+            Header(alias="X-Fault-Control-Token"),
+        ] = None,
+    ) -> FaultStateResponse:
+        authorize_fault_control(x_fault_control_token)
+        return resolved_fault_controller.set_enabled(update.enabled)
 
     @app.get(
         "/payments/{payment_id}",

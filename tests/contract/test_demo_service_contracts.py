@@ -207,6 +207,47 @@ async def test_payment_contract_persists_replays_and_reads_result() -> None:
 
 
 @pytest.mark.asyncio
+async def test_payment_fault_control_is_guarded_explicit_and_reversible() -> None:
+    """The local control API rejects unauthenticated writes and reports exact state."""
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        telemetry_enabled=False,
+        fault_injection_allowed=True,
+        fault_control_token="contract-fault-token",
+    )
+    app = create_payment_app(settings, store=FakePaymentStore())
+    control_headers = {"X-Fault-Control-Token": "contract-fault-token"}
+    async with _client(app) as client:
+        unauthorized = await client.put(
+            "/internal/faults/slow-database",
+            json={"enabled": True},
+        )
+        initial = await client.get(
+            "/internal/faults/slow-database",
+            headers=control_headers,
+        )
+        enabled = await client.put(
+            "/internal/faults/slow-database",
+            json={"enabled": True},
+            headers=control_headers,
+        )
+        disabled = await client.put(
+            "/internal/faults/slow-database",
+            json={"enabled": False},
+            headers=control_headers,
+        )
+
+    assert unauthorized.status_code == 401
+    assert ErrorResponse.model_validate(unauthorized.json()).code == "fault_control_unauthorized"
+    assert initial.json()["enabled"] is False
+    assert enabled.json()["enabled"] is True
+    assert enabled.json()["delay_seconds"] == 2.5
+    assert disabled.json()["enabled"] is False
+
+
+@pytest.mark.asyncio
 async def test_readiness_checks_only_direct_dependencies() -> None:
     """Gateway and order readiness report their immediate required boundaries."""
 

@@ -1,0 +1,16 @@
+global:
+  resolve_timeout: 30s
+
+route:
+  receiver: stage03-webhook
+  group_by: [alertname, service]
+  group_wait: 1s
+  group_interval: 2s
+  repeat_interval: 1m
+
+receivers:
+  - name: stage03-webhook
+    webhook_configs:
+      - url: http://alert-receiver:8000/webhooks/alertmanager
+        send_resolved: true
+        max_alerts: 10

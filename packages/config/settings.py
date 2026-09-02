@@ -61,3 +61,6 @@ class Settings(BaseSettings):
     inventory_sku: str = "widget-001"
     inventory_stock: Annotated[int, Field(ge=1, le=100_000)] = 100
     inventory_unit_price_cents: Annotated[int, Field(ge=1, le=10_000_000)] = 1999
+    fault_injection_allowed: bool = False
+    fault_control_token: SecretStr = Field(default=SecretStr(""), repr=False)
+    slow_database_delay_seconds: Annotated[float, Field(ge=2.0, le=3.0)] = 2.5

@@ -15,6 +15,7 @@ from packages.config import Environment, Settings
         "apps.demo.order_service",
         "apps.demo.inventory_service",
         "apps.demo.payment_service",
+        "apps.demo.alert_receiver",
         "apps.incident_api",
         "apps.investigator_worker",
         "packages.agents",
