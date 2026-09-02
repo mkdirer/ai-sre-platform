@@ -1,12 +1,12 @@
-# Project instructions and planning documents
+# Markdown files
 *.md
-docs/
-prompts/
 
 # Environment variables and secrets
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
 *.pem
 *.key
 secrets/
@@ -16,18 +16,20 @@ __pycache__/
 *.py[cod]
 *.pyd
 *.pyo
-.python-version
 .venv/
 venv/
+.hypothesis/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.uv-cache/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
 dist/
 build/
+site/
 *.egg-info/
 
 # Node.js and frontend
@@ -44,6 +46,9 @@ data/
 artifacts/
 tmp/
 *.pid
+*.sqlite
+*.sqlite3
+*.db
 
 # Docker overrides and local volumes
 docker-compose.override.yml

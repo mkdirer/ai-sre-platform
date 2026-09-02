@@ -1,0 +1,153 @@
+name: ai-sre-platform
+
+x-app-environment: &app-environment
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  OUTBOUND_HTTP_TIMEOUT_SECONDS: ${OUTBOUND_HTTP_TIMEOUT_SECONDS:-5.0}
+  OUTBOUND_HTTP_MAX_ATTEMPTS: ${OUTBOUND_HTTP_MAX_ATTEMPTS:-2}
+  OUTBOUND_HTTP_RETRY_BACKOFF_SECONDS: ${OUTBOUND_HTTP_RETRY_BACKOFF_SECONDS:-0.05}
+
+x-database-environment: &database-environment
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:-aisre}
+  POSTGRES_USER: ${POSTGRES_USER:-aisre}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+  DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3.0}
+
+x-demo-service: &demo-service
+  image: ai-sre-demo:stage01
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:size=16m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  postgres:
+    image: postgres:17.6-bookworm
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aisre}
+      POSTGRES_USER: ${POSTGRES_USER:-aisre}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infrastructure/docker/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  migrate:
+    <<: *demo-service
+    build:
+      context: .
+      dockerfile: infrastructure/docker/demo.Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: [*app-environment, *database-environment]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  inventory-service:
+    <<: *demo-service
+    command:
+      - uvicorn
+      - apps.demo.inventory_service.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *app-environment
+      INVENTORY_SKU: ${INVENTORY_SKU:-widget-001}
+      INVENTORY_STOCK: ${INVENTORY_STOCK:-100}
+      INVENTORY_UNIT_PRICE_CENTS: ${INVENTORY_UNIT_PRICE_CENTS:-1999}
+    ports:
+      - "127.0.0.1:${INVENTORY_SERVICE_PORT:-8003}:8000"
+    healthcheck: &application-healthcheck
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)",
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+  payment-service:
+    <<: *demo-service
+    command:
+      - uvicorn
+      - apps.demo.payment_service.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: [*app-environment, *database-environment]
+    ports:
+      - "127.0.0.1:${PAYMENT_SERVICE_PORT:-8004}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck: *application-healthcheck
+
+  order-service:
+    <<: *demo-service
+    command:
+      - uvicorn
+      - apps.demo.order_service.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *app-environment
+      INVENTORY_SERVICE_URL: http://inventory-service:8000
+      PAYMENT_SERVICE_URL: http://payment-service:8000
+    ports:
+      - "127.0.0.1:${ORDER_SERVICE_PORT:-8002}:8000"
+    depends_on:
+      inventory-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck: *application-healthcheck
+
+  gateway:
+    <<: *demo-service
+    command:
+      - uvicorn
+      - apps.demo.gateway.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+    environment:
+      <<: *app-environment
+      ORDER_SERVICE_URL: http://order-service:8000
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8001}:8000"
+    depends_on:
+      order-service:
+        condition: service_healthy
+    healthcheck: *application-healthcheck
+
+volumes:
+  postgres-data:

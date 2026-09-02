@@ -1,0 +1,53 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python, Compose, and live checkout checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Run deterministic Stage 01 quality gate
+        run: make check UV_SYNC_FLAGS="--all-groups --locked"
+
+      - name: Start the Stage 01 stack
+        run: docker compose up --build --detach
+
+      - name: Inspect service health
+        run: docker compose ps
+
+      - name: Run checkout smoke and integration tests
+        run: |
+          make smoke
+          make test-integration
+
+      - name: Capture service logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Stop the Stage 01 stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans
