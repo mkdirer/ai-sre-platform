@@ -1,0 +1,81 @@
+# Project instructions and planning documents
+*.md
+docs/
+prompts/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.python-version
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node.js and frontend
+node_modules/
+.npm/
+.pnpm-store/
+apps/frontend/dist/
+apps/frontend/coverage/
+
+# Logs and runtime data
+*.log
+logs/
+data/
+artifacts/
+tmp/
+*.pid
+
+# Docker overrides and local volumes
+docker-compose.override.yml
+.docker/
+volumes/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+!.terraform.lock.hcl
+
+# Kubernetes and Helm local secrets
+values.local.yaml
+values.secret.yaml
+kubeconfig*
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
