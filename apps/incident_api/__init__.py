@@ -1,1 +1,1 @@
-"""Incident API namespace; alert ingestion is deferred to Stage 04."""
+"""Durable Stage 04 Incident API namespace."""

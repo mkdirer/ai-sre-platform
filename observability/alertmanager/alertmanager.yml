@@ -2,15 +2,15 @@ global:
   resolve_timeout: 30s
 
 route:
-  receiver: stage03-webhook
+  receiver: incident-api
   group_by: [alertname, service]
   group_wait: 1s
   group_interval: 2s
   repeat_interval: 1m
 
 receivers:
-  - name: stage03-webhook
+  - name: incident-api
     webhook_configs:
-      - url: http://alert-receiver:8000/webhooks/alertmanager
+      - url: http://incident-api:8000/api/v1/alerts
         send_resolved: true
         max_alerts: 10

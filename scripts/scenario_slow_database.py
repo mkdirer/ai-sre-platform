@@ -16,9 +16,19 @@ from uuid import uuid4
 import httpx
 from pydantic import ValidationError
 
-from packages.models.alerts import AlertDeliveryList
+from packages.incidents import alert_fingerprint
 from packages.models.checkout import CheckoutResponse
 from packages.models.faults import FaultStateResponse
+from packages.models.incidents import (
+    AlertIngestResponse,
+    AuditEventPage,
+    IncidentDetail,
+    IncidentPage,
+    InvestigationRunPage,
+    InvestigationRunStatus,
+    QueueJobPage,
+    QueueJobStatus,
+)
 
 ALERT_NAME = "DemoPaymentHighLatency"
 PAYMENT_P95_QUERY = (
@@ -28,6 +38,14 @@ PAYMENT_P95_QUERY = (
 )
 FAULT_GAUGE_QUERY = 'demo_fault_enabled{service="payment-service",fault="slow_database"}'
 TRACE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
+EXPECTED_ALERT_FINGERPRINT = alert_fingerprint(
+    {
+        "alertname": ALERT_NAME,
+        "fault": "slow_database",
+        "service": "payment-service",
+        "severity": "warning",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -40,7 +58,7 @@ class Arguments:
     loki_url: str
     tempo_url: str
     alertmanager_url: str
-    receiver_url: str
+    incident_api_url: str
     fault_control_token: str
     traffic_count: int
     request_timeout_seconds: float
@@ -55,6 +73,24 @@ class CheckoutEvidence:
     trace_id: str
     started_at_ns: int
     latency_seconds: float
+
+
+@dataclass(frozen=True)
+class IncidentBaseline:
+    """Existing durable state captured before this bounded scenario run."""
+
+    occurrence_count: int
+    run_ids: frozenset[str]
+    job_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class IncidentEvidence:
+    """Durable incident, completed placeholder run, and queue-job proof."""
+
+    incident: IncidentDetail
+    run_id: str
+    job_id: str
 
 
 def _bounded_count(value: str) -> int:
@@ -100,8 +136,8 @@ def parse_arguments() -> Arguments:
         default=os.getenv("SCENARIO_ALERTMANAGER_URL", "http://127.0.0.1:9093"),
     )
     parser.add_argument(
-        "--receiver-url",
-        default=os.getenv("SCENARIO_ALERT_RECEIVER_URL", "http://127.0.0.1:8005"),
+        "--incident-api-url",
+        default=os.getenv("SCENARIO_INCIDENT_API_URL", "http://127.0.0.1:8006"),
     )
     parser.add_argument(
         "--fault-control-token",
@@ -128,7 +164,7 @@ def parse_arguments() -> Arguments:
         loki_url=str(parsed.loki_url).rstrip("/"),
         tempo_url=str(parsed.tempo_url).rstrip("/"),
         alertmanager_url=str(parsed.alertmanager_url).rstrip("/"),
-        receiver_url=str(parsed.receiver_url).rstrip("/"),
+        incident_api_url=str(parsed.incident_api_url).rstrip("/"),
         fault_control_token=token,
         traffic_count=int(parsed.traffic_count),
         request_timeout_seconds=float(parsed.request_timeout),
@@ -468,19 +504,19 @@ async def _wait_for_alert_recovery(
 async def _wait_for_alertmanager_alert(
     client: httpx.AsyncClient,
     arguments: Arguments,
-) -> bool:
-    async def probe() -> bool | None:
+) -> dict[str, object]:
+    async def probe() -> dict[str, object] | None:
         response = await client.get(f"{arguments.alertmanager_url}/api/v2/alerts")
         _require_success(response, "Alertmanager alerts query")
         alerts = response.json()
-        found = any(
-            alert.get("labels", {}).get("alertname") == ALERT_NAME
-            and alert.get("status", {}).get("state") == "active"
-            for alert in alerts
-        )
-        if not found:
-            raise ValueError(f"Alertmanager has no active {ALERT_NAME}")
-        return True
+        for alert in alerts:
+            if (
+                isinstance(alert, dict)
+                and alert.get("labels", {}).get("alertname") == ALERT_NAME
+                and alert.get("status", {}).get("state") == "active"
+            ):
+                return alert
+        raise ValueError(f"Alertmanager has no active {ALERT_NAME}")
 
     return await _wait_for(
         "Alertmanager active alert",
@@ -489,32 +525,218 @@ async def _wait_for_alertmanager_alert(
     )
 
 
-async def _wait_for_delivery(
+async def _matching_incident(
     client: httpx.AsyncClient,
     arguments: Arguments,
     *,
-    delivery_status: str,
-) -> int:
-    async def probe() -> int | None:
-        response = await client.get(
-            f"{arguments.receiver_url}/deliveries",
-            params={"alertname": ALERT_NAME, "status": delivery_status},
+    fingerprint: str,
+) -> IncidentDetail | None:
+    response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/incidents",
+        params={"limit": "100", "offset": "0"},
+    )
+    _require_success(response, "Incident API list")
+    page = IncidentPage.model_validate(response.json())
+    matches = [item for item in page.items if item.alert_fingerprint == fingerprint]
+    if len(matches) > 1:
+        raise RuntimeError("stable alert fingerprint mapped to more than one durable incident")
+    if not matches:
+        return None
+    detail_response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/incidents/{matches[0].id}"
+    )
+    _require_success(detail_response, "Incident API detail")
+    return IncidentDetail.model_validate(detail_response.json())
+
+
+async def _incident_baseline(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+    *,
+    fingerprint: str,
+) -> IncidentBaseline:
+    incident = await _matching_incident(client, arguments, fingerprint=fingerprint)
+    if incident is None:
+        return IncidentBaseline(occurrence_count=0, run_ids=frozenset(), job_ids=frozenset())
+    runs_response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/investigation-runs",
+        params={"limit": "100"},
+    )
+    jobs_response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/investigation-jobs",
+        params={"incident_id": incident.id, "limit": "100"},
+    )
+    _require_success(runs_response, "Incident API baseline runs")
+    _require_success(jobs_response, "Incident API baseline jobs")
+    runs = InvestigationRunPage.model_validate(runs_response.json())
+    jobs = QueueJobPage.model_validate(jobs_response.json())
+    return IncidentBaseline(
+        occurrence_count=incident.occurrence_count,
+        run_ids=frozenset(str(run.id) for run in runs.items),
+        job_ids=frozenset(str(job.id) for job in jobs.items),
+    )
+
+
+async def _wait_for_incident_processed(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+    *,
+    fingerprint: str,
+    baseline: IncidentBaseline,
+) -> IncidentEvidence:
+    async def probe() -> IncidentEvidence | None:
+        incident = await _matching_incident(client, arguments, fingerprint=fingerprint)
+        if incident is None:
+            raise ValueError("Incident API has not persisted the alert")
+        if incident.occurrence_count <= baseline.occurrence_count:
+            raise ValueError(
+                f"incident occurrence_count={incident.occurrence_count} has not advanced"
+            )
+        runs_response = await client.get(
+            f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/investigation-runs",
+            params={"limit": "100"},
         )
-        _require_success(response, "alert receiver delivery query")
-        deliveries = AlertDeliveryList.model_validate(response.json()).deliveries
-        if not deliveries:
-            raise ValueError(f"receiver has no {delivery_status} {ALERT_NAME} delivery")
-        return deliveries[-1].sequence
+        jobs_response = await client.get(
+            f"{arguments.incident_api_url}/api/v1/investigation-jobs",
+            params={"incident_id": incident.id, "limit": "100"},
+        )
+        timeline_response = await client.get(
+            f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/timeline",
+            params={"limit": "100"},
+        )
+        _require_success(runs_response, "Incident API investigation runs")
+        _require_success(jobs_response, "Incident API queue jobs")
+        _require_success(timeline_response, "Incident API timeline")
+        runs = InvestigationRunPage.model_validate(runs_response.json())
+        jobs = QueueJobPage.model_validate(jobs_response.json())
+        timeline = AuditEventPage.model_validate(timeline_response.json())
+        completed_runs = [
+            run
+            for run in runs.items
+            if str(run.id) not in baseline.run_ids
+            and run.status == InvestigationRunStatus.PLACEHOLDER_COMPLETE_NO_AI
+        ]
+        completed_jobs = [
+            job
+            for job in jobs.items
+            if str(job.id) not in baseline.job_ids and job.status == QueueJobStatus.COMPLETED
+        ]
+        if not completed_runs or not completed_jobs:
+            raise ValueError(
+                "placeholder not complete yet: "
+                f"run_statuses={[run.status for run in runs.items]} "
+                f"job_statuses={[job.status for job in jobs.items]}"
+            )
+        if not any(
+            event.event_type == "investigation.placeholder_completed_no_ai"
+            and event.details.get("ai_executed") is False
+            for event in timeline.items
+        ):
+            raise ValueError("timeline lacks the explicit no-AI completion event")
+        if incident.root_cause is not None or incident.confidence is not None:
+            raise RuntimeError("Stage 04 placeholder fabricated an AI investigation result")
+        return IncidentEvidence(
+            incident=incident,
+            run_id=str(completed_runs[0].id),
+            job_id=str(completed_jobs[0].id),
+        )
 
     return await _wait_for(
-        f"{delivery_status} webhook delivery",
+        "durable incident and processed no-AI placeholder",
+        deadline_seconds=arguments.poll_deadline_seconds,
+        probe=probe,
+    )
+
+
+async def _prove_duplicate_delivery(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+    *,
+    alertmanager_alert: dict[str, object],
+    evidence: IncidentEvidence,
+) -> None:
+    labels = alertmanager_alert.get("labels")
+    annotations = alertmanager_alert.get("annotations", {})
+    if not isinstance(labels, dict) or not isinstance(annotations, dict):
+        raise RuntimeError("Alertmanager API returned malformed alert labels/annotations")
+    alert_payload = {
+        "status": "firing",
+        "labels": labels,
+        "annotations": annotations,
+        "startsAt": alertmanager_alert.get("startsAt"),
+        "endsAt": alertmanager_alert.get("endsAt", "0001-01-01T00:00:00Z"),
+        "generatorURL": alertmanager_alert.get("generatorURL", ""),
+        "fingerprint": alertmanager_alert.get("fingerprint", ""),
+    }
+    webhook = {
+        "version": "4",
+        "status": "firing",
+        "receiver": "incident-api",
+        "alerts": [alert_payload],
+    }
+    for attempt in range(2):
+        response = await client.post(
+            f"{arguments.incident_api_url}/api/v1/alerts",
+            json=webhook,
+            headers={"X-Request-ID": f"stage04-duplicate-{attempt + 1}"},
+        )
+        _require_success(response, "duplicate Alertmanager delivery")
+        body = AlertIngestResponse.model_validate(response.json())
+        if not body.alerts[0].duplicate or body.alerts[0].investigation_enqueued:
+            raise RuntimeError("duplicate delivery was not an idempotent no-op")
+    after = await _matching_incident(
+        client,
+        arguments,
+        fingerprint=evidence.incident.alert_fingerprint,
+    )
+    if after is None or after.occurrence_count != evidence.incident.occurrence_count:
+        raise RuntimeError("duplicate delivery changed durable occurrence count")
+    runs_response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/incidents/{evidence.incident.id}/investigation-runs",
+        params={"limit": "100"},
+    )
+    jobs_response = await client.get(
+        f"{arguments.incident_api_url}/api/v1/investigation-jobs",
+        params={"incident_id": evidence.incident.id, "limit": "100"},
+    )
+    _require_success(runs_response, "post-duplicate investigation runs")
+    _require_success(jobs_response, "post-duplicate queue jobs")
+    runs = InvestigationRunPage.model_validate(runs_response.json())
+    jobs = QueueJobPage.model_validate(jobs_response.json())
+    if sum(str(run.id) == evidence.run_id for run in runs.items) != 1:
+        raise RuntimeError("duplicate delivery changed the placeholder run")
+    if sum(str(job.id) == evidence.job_id for job in jobs.items) != 1:
+        raise RuntimeError("duplicate delivery changed the queue job")
+
+
+async def _wait_for_incident_resolved(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+    *,
+    evidence: IncidentEvidence,
+) -> IncidentDetail:
+    async def probe() -> IncidentDetail | None:
+        incident = await _matching_incident(
+            client,
+            arguments,
+            fingerprint=evidence.incident.alert_fingerprint,
+        )
+        if incident is None or incident.status.value != "resolved":
+            observed = None if incident is None else incident.status.value
+            raise ValueError(f"durable incident status is {observed}, not resolved")
+        if incident.occurrence_count <= evidence.incident.occurrence_count:
+            raise ValueError("resolved Alertmanager update was not stored as an occurrence")
+        return incident
+
+    return await _wait_for(
+        "durable resolved incident update",
         deadline_seconds=arguments.poll_deadline_seconds,
         probe=probe,
     )
 
 
 async def run_scenario(arguments: Arguments) -> None:
-    """Prove baseline, deterministic degradation, alert delivery, and recovery."""
+    """Prove fault, alert, durable deduplication, async placeholder, and recovery."""
 
     timeout = httpx.Timeout(arguments.request_timeout_seconds)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -525,7 +747,7 @@ async def run_scenario(arguments: Arguments) -> None:
             ("Loki readiness", f"{arguments.loki_url}/ready"),
             ("Tempo readiness", f"{arguments.tempo_url}/ready"),
             ("Alertmanager readiness", f"{arguments.alertmanager_url}/-/ready"),
-            ("alert receiver readiness", f"{arguments.receiver_url}/health/ready"),
+            ("Incident API readiness", f"{arguments.incident_api_url}/health/ready"),
         )
         for name, url in readiness_checks:
             await _wait_for_http_ready(
@@ -537,8 +759,11 @@ async def run_scenario(arguments: Arguments) -> None:
 
         await _set_fault(client, arguments, enabled=False)
         await _wait_for_alert_recovery(client, arguments)
-        clear_response = await client.delete(f"{arguments.receiver_url}/deliveries")
-        _require_success(clear_response, "clear alert receiver")
+        incident_baseline = await _incident_baseline(
+            client,
+            arguments,
+            fingerprint=EXPECTED_ALERT_FINGERPRINT,
+        )
 
         baseline = await _checkout(client, arguments, label="baseline")
         if baseline.latency_seconds >= 1.0:
@@ -587,15 +812,37 @@ async def run_scenario(arguments: Arguments) -> None:
                 description="payment p95 above 2 seconds",
             )
             await _wait_for_firing_alert(client, arguments)
-            await _wait_for_alertmanager_alert(client, arguments)
-            firing_sequence = await _wait_for_delivery(
+            alertmanager_alert = await _wait_for_alertmanager_alert(client, arguments)
+            labels = alertmanager_alert.get("labels")
+            if not isinstance(labels, dict) or not all(
+                isinstance(key, str) and isinstance(value, str) for key, value in labels.items()
+            ):
+                raise RuntimeError("Alertmanager returned invalid labels")
+            actual_fingerprint = alert_fingerprint(labels)
+            if actual_fingerprint != EXPECTED_ALERT_FINGERPRINT:
+                raise RuntimeError(
+                    "alert labels differ from the repository rule; "
+                    f"expected_fingerprint={EXPECTED_ALERT_FINGERPRINT} "
+                    f"actual_fingerprint={actual_fingerprint}"
+                )
+            incident_evidence = await _wait_for_incident_processed(
                 client,
                 arguments,
-                delivery_status="firing",
+                fingerprint=actual_fingerprint,
+                baseline=incident_baseline,
+            )
+            await _prove_duplicate_delivery(
+                client,
+                arguments,
+                alertmanager_alert=alertmanager_alert,
+                evidence=incident_evidence,
             )
             print(
                 f"alert name={ALERT_NAME} prometheus=firing alertmanager=active "
-                f"p95_seconds={p95:.3f} webhook_sequence={firing_sequence}"
+                f"p95_seconds={p95:.3f} incident_id={incident_evidence.incident.id} "
+                f"occurrences={incident_evidence.incident.occurrence_count} "
+                f"run_id={incident_evidence.run_id} job_id={incident_evidence.job_id} "
+                "placeholder=placeholder_complete_no_ai duplicate_delivery=idempotent"
             )
 
         recovered = await _checkout(client, arguments, label="recovery")
@@ -612,15 +859,17 @@ async def run_scenario(arguments: Arguments) -> None:
             description="disabled fault gauge",
         )
         await _wait_for_alert_recovery(client, arguments)
-        resolved_sequence = await _wait_for_delivery(
+        resolved_incident = await _wait_for_incident_resolved(
             client,
             arguments,
-            delivery_status="resolved",
+            evidence=incident_evidence,
         )
         print(
             f"recovery fault_gauge={gauge_value:.0f} "
             f"latency_seconds={recovered.latency_seconds:.3f} "
-            f"prometheus=inactive webhook_status=resolved webhook_sequence={resolved_sequence}"
+            f"prometheus=inactive incident_id={resolved_incident.id} "
+            f"incident_status={resolved_incident.status.value} "
+            f"occurrences={resolved_incident.occurrence_count}"
         )
 
 

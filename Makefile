@@ -8,7 +8,8 @@ LIVE_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
 	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
-	scenario-slow-database milestone1-smoke compose-validate check
+	scenario-slow-database scenario-incident-pipeline milestone1-smoke milestone2-smoke \
+	compose-validate check
 
 setup: sync
 
@@ -61,10 +62,14 @@ smoke:
 smoke-observability:
 	$(UV) run python scripts/smoke_observability.py
 
-scenario-slow-database:
+scenario-incident-pipeline:
 	$(UV) run python scripts/scenario_slow_database.py
 
-milestone1-smoke: smoke smoke-observability scenario-slow-database
+scenario-slow-database: scenario-incident-pipeline
+
+milestone1-smoke: smoke smoke-observability scenario-incident-pipeline
+
+milestone2-smoke: smoke smoke-observability scenario-incident-pipeline
 
 compose-validate:
 	$(COMPOSE) config --quiet

@@ -20,8 +20,21 @@ x-database-environment: &database-environment
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
   DATABASE_CONNECT_TIMEOUT_SECONDS: ${DATABASE_CONNECT_TIMEOUT_SECONDS:-3.0}
 
+x-queue-environment: &queue-environment
+  CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+  CELERY_RESULT_BACKEND_URL: ${CELERY_RESULT_BACKEND_URL:-redis://redis:6379/1}
+  QUEUE_PUBLISH_TIMEOUT_SECONDS: ${QUEUE_PUBLISH_TIMEOUT_SECONDS:-2.0}
+  INVESTIGATION_MAX_ATTEMPTS: ${INVESTIGATION_MAX_ATTEMPTS:-3}
+  INVESTIGATION_RETRY_BASE_SECONDS: ${INVESTIGATION_RETRY_BASE_SECONDS:-2}
+  INVESTIGATION_RETRY_MAX_SECONDS: ${INVESTIGATION_RETRY_MAX_SECONDS:-30}
+  INVESTIGATION_JOB_LEASE_SECONDS: ${INVESTIGATION_JOB_LEASE_SECONDS:-15}
+  CELERY_VISIBILITY_TIMEOUT_SECONDS: ${CELERY_VISIBILITY_TIMEOUT_SECONDS:-300}
+
 x-demo-service: &demo-service
-  image: ai-sre-demo:stage03
+  image: ai-sre-platform:stage04
+  build:
+    context: .
+    dockerfile: infrastructure/docker/demo.Dockerfile
   init: true
   read_only: true
   tmpfs:
@@ -50,11 +63,24 @@ services:
       retries: 20
       start_period: 5s
 
+  redis:
+    image: redis:8.2.9-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
   migrate:
     <<: *demo-service
-    build:
-      context: .
-      dockerfile: infrastructure/docker/demo.Dockerfile
     command: ["alembic", "upgrade", "head"]
     environment:
       <<: [*app-environment, *database-environment]
@@ -188,6 +214,7 @@ services:
 
   alert-receiver:
     <<: *demo-service
+    profiles: ["test-tools"]
     command:
       - uvicorn
       - apps.demo.alert_receiver.main:create_app
@@ -203,6 +230,65 @@ services:
       - "127.0.0.1:${ALERT_RECEIVER_PORT:-8005}:8000"
     healthcheck: *application-healthcheck
 
+  incident-api:
+    <<: *demo-service
+    command:
+      - uvicorn
+      - apps.incident_api.main:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-access-log
+    environment:
+      <<: [*app-environment, *database-environment, *queue-environment]
+    ports:
+      - "127.0.0.1:${INCIDENT_API_PORT:-8006}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck: *application-healthcheck
+
+  investigator-worker:
+    <<: *demo-service
+    hostname: investigator-worker
+    command:
+      - celery
+      - -A
+      - apps.investigator_worker.celery_app:celery_app
+      - worker
+      - --loglevel=INFO
+      - --concurrency=1
+      - --hostname=investigator@%h
+    environment:
+      <<: [*app-environment, *database-environment, *queue-environment]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "celery",
+          "-A",
+          "apps.investigator_worker.celery_app:celery_app",
+          "inspect",
+          "ping",
+          "--destination",
+          "investigator@investigator-worker",
+          "--timeout",
+          "2",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   alertmanager:
     image: prom/alertmanager:v0.33.1
     command:
@@ -214,7 +300,7 @@ services:
     ports:
       - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
     depends_on:
-      alert-receiver:
+      incident-api:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true
@@ -299,6 +385,8 @@ services:
         condition: service_started
       payment-service:
         condition: service_started
+      incident-api:
+        condition: service_started
       alertmanager:
         condition: service_healthy
     security_opt:
@@ -351,3 +439,4 @@ volumes:
   tempo-data:
   grafana-data:
   alertmanager-data:
+  redis-data:

@@ -6,7 +6,12 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 
-from packages.telemetry.context import current_span_id, current_trace_id, get_request_id
+from packages.telemetry.context import (
+    current_span_id,
+    current_trace_id,
+    get_incident_id,
+    get_request_id,
+)
 
 _MAX_STRING_LENGTH = 1_024
 _MAX_COLLECTION_ITEMS = 32
@@ -105,6 +110,7 @@ class JsonLogFormatter(logging.Formatter):
             "trace_id": current_trace_id(),
             "span_id": current_span_id(),
             "request_id": get_request_id(),
+            "incident_id": get_incident_id(),
             "attributes": attributes,
         }
         return json.dumps(payload, separators=(",", ":"), sort_keys=True)

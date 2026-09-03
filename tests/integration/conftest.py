@@ -1,4 +1,4 @@
-"""Declared PostgreSQL fixtures for Stage 01 integration tests."""
+"""Declared PostgreSQL fixtures for migration and persistence integration tests."""
 
 import asyncio
 import os

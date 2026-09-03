@@ -16,7 +16,7 @@ def _arguments() -> Arguments:
         loki_url="http://loki.test",
         tempo_url="http://tempo.test",
         alertmanager_url="http://alertmanager.test",
-        receiver_url="http://receiver.test",
+        incident_api_url="http://incident-api.test",
         fault_control_token="scenario-token",
         traffic_count=4,
         request_timeout_seconds=5.0,

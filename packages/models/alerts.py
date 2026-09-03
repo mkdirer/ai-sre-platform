@@ -1,4 +1,4 @@
-"""Bounded Alertmanager webhook contracts for the Stage 03 receiver stub."""
+"""Bounded Alertmanager webhook contracts shared by the stub and Incident API."""
 
 from datetime import datetime
 from typing import Annotated, Literal
@@ -6,6 +6,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 BoundedText = Annotated[str, StringConstraints(max_length=2_048)]
+SourceFingerprint = Annotated[str, StringConstraints(max_length=256)]
+LabelName = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+LabelMap = Annotated[dict[LabelName, BoundedText], Field(max_length=64)]
 AlertStatus = Literal["firing", "resolved"]
 
 
@@ -15,12 +18,12 @@ class AlertmanagerAlert(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     status: AlertStatus
-    labels: dict[str, BoundedText]
-    annotations: dict[str, BoundedText] = Field(default_factory=dict)
+    labels: LabelMap
+    annotations: LabelMap = Field(default_factory=dict)
     starts_at: datetime = Field(alias="startsAt")
     ends_at: datetime = Field(alias="endsAt")
     generator_url: BoundedText = Field(default="", alias="generatorURL")
-    fingerprint: BoundedText = ""
+    fingerprint: SourceFingerprint = ""
 
 
 class AlertmanagerWebhook(BaseModel):

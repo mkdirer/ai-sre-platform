@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   quality:
-    name: Python, Compose, checkout, telemetry, and alert checks
+    name: Python, Compose, checkout, telemetry, incident, and queue checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -30,11 +30,11 @@ jobs:
       - name: Install Python 3.12
         run: uv python install 3.12
 
-      - name: Run deterministic Milestone 1 quality gate
+      - name: Run deterministic Stage 04 quality gate
         run: make check UV_SYNC_FLAGS="--all-groups --locked"
 
-      - name: Start the Milestone 1 stack
-        run: docker compose up --build --detach
+      - name: Start the Stage 04 stack
+        run: docker compose up --build --detach --wait --wait-timeout 180
 
       - name: Inspect service health
         run: docker compose ps
@@ -44,12 +44,12 @@ jobs:
           make smoke
           make test-integration
           make smoke-observability
-          make scenario-slow-database
+          make scenario-incident-pipeline
 
       - name: Capture service logs on failure
         if: failure()
         run: docker compose logs --no-color
 
-      - name: Stop the Milestone 1 stack
+      - name: Stop the Stage 04 stack
         if: always()
         run: docker compose down --volumes --remove-orphans

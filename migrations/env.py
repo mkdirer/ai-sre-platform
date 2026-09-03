@@ -10,6 +10,13 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.config import Settings
 from packages.persistence.database import Base, build_database_url
+from packages.persistence.incident_rows import (  # noqa: F401
+    AlertOccurrenceRow,
+    AuditEventRow,
+    IncidentRow,
+    InvestigationRunRow,
+    QueueJobRow,
+)
 from packages.persistence.payment_store import PaymentRow  # noqa: F401
 
 config = context.config

@@ -24,3 +24,6 @@ scrape_configs:
   - job_name: payment-service
     static_configs:
       - targets: [payment-service:8000]
+  - job_name: incident-api
+    static_configs:
+      - targets: [incident-api:8000]

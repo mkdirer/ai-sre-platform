@@ -51,6 +51,20 @@ class Settings(BaseSettings):
     postgres_db: str = "aisre"
     postgres_user: str = "aisre"
     postgres_password: SecretStr = Field(default=SecretStr(""), repr=False)
+    celery_broker_url: SecretStr = Field(
+        default=SecretStr("redis://127.0.0.1:6379/0"),
+        repr=False,
+    )
+    celery_result_backend_url: SecretStr = Field(
+        default=SecretStr("redis://127.0.0.1:6379/1"),
+        repr=False,
+    )
+    queue_publish_timeout_seconds: Annotated[float, Field(gt=0, le=10)] = 2.0
+    investigation_max_attempts: Annotated[int, Field(ge=1, le=10)] = 3
+    investigation_retry_base_seconds: Annotated[int, Field(ge=1, le=300)] = 2
+    investigation_retry_max_seconds: Annotated[int, Field(ge=1, le=3_600)] = 30
+    investigation_job_lease_seconds: Annotated[int, Field(ge=5, le=3_600)] = 15
+    celery_visibility_timeout_seconds: Annotated[int, Field(ge=30, le=86_400)] = 300
     outbound_http_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 5.0
     outbound_http_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
     outbound_http_retry_backoff_seconds: Annotated[float, Field(ge=0, le=1)] = 0.05

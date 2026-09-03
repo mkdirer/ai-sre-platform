@@ -9,6 +9,7 @@ from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
+_incident_id: ContextVar[str | None] = ContextVar("incident_id", default=None)
 _trace_context = TraceContextTextMapPropagator()
 
 
@@ -28,6 +29,24 @@ def get_request_id() -> str | None:
     """Return the request ID associated with the current execution context."""
 
     return _request_id.get()
+
+
+def bind_incident_id(incident_id: str) -> Token[str | None]:
+    """Bind a validated incident ID to the current async or worker context."""
+
+    return _incident_id.set(incident_id)
+
+
+def reset_incident_id(token: Token[str | None]) -> None:
+    """Restore the incident correlation context after work completes."""
+
+    _incident_id.reset(token)
+
+
+def get_incident_id() -> str | None:
+    """Return the incident ID associated with the current execution context."""
+
+    return _incident_id.get()
 
 
 def current_trace_id() -> str | None:

@@ -18,11 +18,20 @@ def test_payment_latency_alert_uses_real_bounded_metric_labels() -> None:
     assert "trace_id" not in rule
 
 
-def test_alertmanager_routes_firing_and_resolved_to_stub() -> None:
-    """The disposable receiver gets both edges of the alert lifecycle."""
+def test_alertmanager_routes_firing_and_resolved_to_durable_incident_api() -> None:
+    """Stage 04 replaces the runtime stub route while preserving both lifecycle edges."""
 
     configuration = Path("observability/alertmanager/alertmanager.yml").read_text()
 
-    assert "http://alert-receiver:8000/webhooks/alertmanager" in configuration
+    assert "http://incident-api:8000/api/v1/alerts" in configuration
     assert "send_resolved: true" in configuration
     assert "group_wait: 1s" in configuration
+
+
+def test_disposable_receiver_remains_an_explicit_test_tool() -> None:
+    """The Milestone 1 receiver keeps contract-test value but is absent from normal startup."""
+
+    compose = Path("docker-compose.yml").read_text()
+
+    assert "alert-receiver:" in compose
+    assert 'profiles: ["test-tools"]' in compose
