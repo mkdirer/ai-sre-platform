@@ -43,11 +43,12 @@ class IncidentSeverity(StrEnum):
 
 
 class InvestigationRunStatus(StrEnum):
-    """Observable states for the deliberately no-AI Stage 04 worker run."""
+    """Observable states for deterministic pre-AI investigation work."""
 
     QUEUED = "queued"
     RUNNING = "running"
     PLACEHOLDER_COMPLETE_NO_AI = "placeholder_complete_no_ai"
+    EVIDENCE_COLLECTED = "evidence_collected"
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
     DEAD_LETTERED = "dead_lettered"
@@ -176,13 +177,16 @@ class AuditEventPage(BaseModel):
 
 
 class InvestigationRunResponse(BaseModel):
-    """Observable placeholder investigation attempt."""
+    """Observable deterministic investigation attempt."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: UUID
     incident_id: IncidentId
-    stage: Annotated[str, StringConstraints(pattern=r"^no_ai_placeholder$")]
+    stage: Annotated[
+        str,
+        StringConstraints(pattern=r"^(no_ai_placeholder|evidence_collection)$"),
+    ]
     status: InvestigationRunStatus
     attempt: Annotated[int, Field(ge=0)]
     error_type: str | None

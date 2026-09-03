@@ -52,12 +52,19 @@ def redact_text(value: str) -> str:
     return redacted
 
 
-def redact_value(value: object, *, key: str | None = None, depth: int = 0) -> object:
+def redact_value(
+    value: object,
+    *,
+    key: str | None = None,
+    depth: int = 0,
+    max_depth: int = _MAX_DEPTH,
+    max_collection_items: int = _MAX_COLLECTION_ITEMS,
+) -> object:
     """Return a bounded JSON-safe representation with secret-valued keys removed."""
 
     if key is not None and _normalized_key(key) in _SECRET_KEYS:
         return "[REDACTED]"
-    if depth >= _MAX_DEPTH:
+    if depth >= max_depth:
         return "[TRUNCATED]"
     if value is None or isinstance(value, bool | int | float):
         return value
@@ -66,7 +73,7 @@ def redact_value(value: object, *, key: str | None = None, depth: int = 0) -> ob
     if isinstance(value, Mapping):
         redacted_mapping: dict[str, object] = {}
         for index, (nested_key, nested_value) in enumerate(value.items()):
-            if index >= _MAX_COLLECTION_ITEMS:
+            if index >= max_collection_items:
                 redacted_mapping["_truncated"] = True
                 break
             string_key = str(nested_key)[:128]
@@ -74,10 +81,20 @@ def redact_value(value: object, *, key: str | None = None, depth: int = 0) -> ob
                 nested_value,
                 key=string_key,
                 depth=depth + 1,
+                max_depth=max_depth,
+                max_collection_items=max_collection_items,
             )
         return redacted_mapping
     if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
-        return [redact_value(item, depth=depth + 1) for item in value[:_MAX_COLLECTION_ITEMS]]
+        return [
+            redact_value(
+                item,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_collection_items=max_collection_items,
+            )
+            for item in value[:max_collection_items]
+        ]
     return redact_text(str(value))
 
 

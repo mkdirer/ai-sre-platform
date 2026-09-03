@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -14,10 +15,11 @@ from packages.incidents import (
     normalize_webhook,
 )
 from packages.incidents.worker import (
-    PlaceholderInvestigationService,
+    EvidenceInvestigationService,
     WorkerExecutionStatus,
 )
 from packages.models.alerts import AlertmanagerWebhook
+from packages.models.evidence import EvidenceSource, SourceCollectionSummary
 from packages.models.incidents import IncidentStatus
 from packages.persistence import WorkerClaim
 from packages.task_queue import CeleryIncidentPublisher
@@ -30,6 +32,7 @@ from packages.telemetry import (
 JOB_ID = UUID("7af2ffbd-50fe-42ae-b8be-58ca28fe3f8e")
 RUN_ID = UUID("42a9f41a-c334-4ad9-99da-0e52ae33576f")
 INCIDENT_ID = "INC-A1B2C3D4E5F60708"
+NOW = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
 
 
 def _webhook(
@@ -129,7 +132,7 @@ class _FakeCelery:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def send_task(self, name: str, **options: object) -> object:
+    async def send_task(self, name: str, **options: object) -> object:
         self.calls.append({"name": name, **options})
         return object()
 
@@ -148,7 +151,7 @@ async def test_queue_message_contains_only_incident_id() -> None:
 
     assert fake.calls == [
         {
-            "name": "incident.process_no_ai_placeholder",
+            "name": "incident.collect_evidence",
             "args": [INCIDENT_ID],
             "task_id": str(JOB_ID),
             "queue": "incidents",
@@ -176,11 +179,21 @@ class _WorkerStore:
             incident_id=incident_id,
             incident_title="Payment latency",
             service="payment-service",
+            affected_services=("payment-service",),
+            started_at=NOW,
+            investigation_window_start=NOW - timedelta(minutes=10),
+            investigation_window_end=NOW + timedelta(minutes=5),
             attempt=self.attempt,
             max_attempts=3,
         )
 
-    async def complete_placeholder_job(self, _job_id: UUID) -> None:
+    async def complete_evidence_job(
+        self,
+        _job_id: UUID,
+        *,
+        source_summaries: list[dict[str, object]],
+    ) -> None:
+        assert source_summaries
         self.completed += 1
 
     async def record_job_failure(
@@ -195,16 +208,24 @@ class _WorkerStore:
 
 
 @pytest.mark.asyncio
-async def test_placeholder_worker_is_retry_idempotent_and_explicitly_no_ai() -> None:
-    """A duplicate job is a no-op after the named placeholder checkpoint completes."""
+async def test_evidence_worker_is_retry_idempotent_and_explicitly_no_ai() -> None:
+    """A duplicate job is a no-op after deterministic evidence collection completes."""
 
     store = _WorkerStore()
-    service = PlaceholderInvestigationService(store, Settings(_env_file=None))
+
+    async def collect(_claim: WorkerClaim) -> tuple[SourceCollectionSummary, ...]:
+        return (SourceCollectionSummary(source=EvidenceSource.PROMETHEUS, collected=1),)
+
+    service = EvidenceInvestigationService(
+        store,
+        Settings(_env_file=None),
+        operation=collect,
+    )
 
     first = await service.execute(job_id=JOB_ID, incident_id=INCIDENT_ID)
     replay = await service.execute(job_id=JOB_ID, incident_id=INCIDENT_ID)
 
-    assert first.status == WorkerExecutionStatus.PLACEHOLDER_COMPLETE_NO_AI
+    assert first.status == WorkerExecutionStatus.EVIDENCE_COLLECTED
     assert replay.status == WorkerExecutionStatus.SKIPPED_IDEMPOTENT
     assert store.completed == 1
 
@@ -217,18 +238,18 @@ async def test_placeholder_worker_is_retry_idempotent_and_explicitly_no_ai() -> 
         (3, WorkerExecutionStatus.DEAD_LETTERED, None),
     ],
 )
-async def test_placeholder_worker_records_retry_or_dead_letter(
+async def test_evidence_worker_records_retry_or_dead_letter(
     attempt: int,
     expected_status: WorkerExecutionStatus,
     expected_delay: int | None,
 ) -> None:
     """Failure is never reported as a successful investigation."""
 
-    async def fail(_claim: WorkerClaim) -> None:
+    async def fail(_claim: WorkerClaim) -> tuple[SourceCollectionSummary, ...]:
         raise RuntimeError("deterministic failure token=secret")
 
     store = _WorkerStore(attempt=attempt, claim_once=False)
-    service = PlaceholderInvestigationService(
+    service = EvidenceInvestigationService(
         store,
         Settings(_env_file=None),
         operation=fail,

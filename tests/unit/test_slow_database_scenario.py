@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from packages.models.deployments import DeploymentEnvironment
 from scripts.scenario_slow_database import Arguments, _fault_log_summary, enabled_fault
 
 
@@ -17,6 +18,7 @@ def _arguments() -> Arguments:
         tempo_url="http://tempo.test",
         alertmanager_url="http://alertmanager.test",
         incident_api_url="http://incident-api.test",
+        environment=DeploymentEnvironment.TEST,
         fault_control_token="scenario-token",
         traffic_count=4,
         request_timeout_seconds=5.0,

@@ -30,8 +30,28 @@ x-queue-environment: &queue-environment
   INVESTIGATION_JOB_LEASE_SECONDS: ${INVESTIGATION_JOB_LEASE_SECONDS:-15}
   CELERY_VISIBILITY_TIMEOUT_SECONDS: ${CELERY_VISIBILITY_TIMEOUT_SECONDS:-300}
 
+x-evidence-environment: &evidence-environment
+  PROMETHEUS_URL: http://prometheus:9090
+  LOKI_URL: http://loki:3100
+  TEMPO_URL: http://tempo:3200
+  EVIDENCE_HTTP_TIMEOUT_SECONDS: ${EVIDENCE_HTTP_TIMEOUT_SECONDS:-2.0}
+  EVIDENCE_HTTP_MAX_ATTEMPTS: ${EVIDENCE_HTTP_MAX_ATTEMPTS:-2}
+  EVIDENCE_HTTP_RETRY_BACKOFF_SECONDS: ${EVIDENCE_HTTP_RETRY_BACKOFF_SECONDS:-0.05}
+  EVIDENCE_SOURCE_TIMEOUT_SECONDS: ${EVIDENCE_SOURCE_TIMEOUT_SECONDS:-8.0}
+  EVIDENCE_MAX_RESPONSE_BYTES: ${EVIDENCE_MAX_RESPONSE_BYTES:-2097152}
+  EVIDENCE_MAX_WINDOW_SECONDS: ${EVIDENCE_MAX_WINDOW_SECONDS:-3600}
+  EVIDENCE_MAX_LOOKBACK_SECONDS: ${EVIDENCE_MAX_LOOKBACK_SECONDS:-21600}
+  EVIDENCE_FUTURE_SKEW_SECONDS: ${EVIDENCE_FUTURE_SKEW_SECONDS:-300}
+  EVIDENCE_DEPLOYMENT_LOOKBACK_SECONDS: ${EVIDENCE_DEPLOYMENT_LOOKBACK_SECONDS:-7200}
+  EVIDENCE_METRIC_STEP_SECONDS: ${EVIDENCE_METRIC_STEP_SECONDS:-5}
+  EVIDENCE_LOG_LIMIT: ${EVIDENCE_LOG_LIMIT:-50}
+  EVIDENCE_TRACE_LIMIT: ${EVIDENCE_TRACE_LIMIT:-10}
+  EVIDENCE_DEPLOYMENT_LIMIT: ${EVIDENCE_DEPLOYMENT_LIMIT:-10}
+  EVIDENCE_CORRELATION_LIMIT: ${EVIDENCE_CORRELATION_LIMIT:-1000}
+  EVIDENCE_SLOW_TRACE_THRESHOLD_MS: ${EVIDENCE_SLOW_TRACE_THRESHOLD_MS:-500}
+
 x-demo-service: &demo-service
-  image: ai-sre-platform:stage04
+  image: ai-sre-platform:stage05
   build:
     context: .
     dockerfile: infrastructure/docker/demo.Dockerfile
@@ -264,11 +284,19 @@ services:
       - --concurrency=1
       - --hostname=investigator@%h
     environment:
-      <<: [*app-environment, *database-environment, *queue-environment]
+      <<: [*app-environment, *database-environment, *queue-environment, *evidence-environment]
+    ports:
+      - "127.0.0.1:${INVESTIGATOR_METRICS_PORT:-9464}:9464"
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+      loki:
+        condition: service_healthy
+      tempo:
         condition: service_healthy
     healthcheck:
       test:

@@ -1,4 +1,4 @@
-"""SQLAlchemy mappings for durable Stage 04 incident and queue state."""
+"""SQLAlchemy mappings for durable incident and queue state."""
 
 from datetime import datetime
 from uuid import UUID
@@ -104,13 +104,17 @@ class AlertOccurrenceRow(Base):
 
 
 class InvestigationRunRow(Base):
-    """One retry-aware no-AI placeholder investigation run."""
+    """One retry-aware deterministic investigation run."""
 
     __tablename__ = "investigation_runs"
     __table_args__ = (
-        CheckConstraint("stage = 'no_ai_placeholder'", name="valid_stage"),
         CheckConstraint(
-            "status IN ('queued','running','placeholder_complete_no_ai','retry_scheduled',"
+            "stage IN ('no_ai_placeholder','evidence_collection')",
+            name="valid_stage",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','placeholder_complete_no_ai','evidence_collected',"
+            "'retry_scheduled',"
             "'failed','dead_lettered','skipped_terminal')",
             name="valid_status",
         ),

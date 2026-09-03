@@ -13,8 +13,22 @@ from apps.demo.common.web import (
     register_shutdown_callback,
 )
 from packages.config import Settings
-from packages.incidents import NormalizedAlert, normalize_webhook
+from packages.incidents import NormalizedAlert, correlate_timeline, normalize_webhook
 from packages.models.alerts import AlertmanagerWebhook
+from packages.models.deployments import (
+    DeploymentEnvironment,
+    DeploymentPage,
+    DeploymentRegistration,
+    DeploymentRegistrationResponse,
+)
+from packages.models.evidence import (
+    CollectionStatus,
+    EvidenceItem,
+    EvidencePage,
+    EvidenceService,
+    EvidenceSource,
+    EvidenceTimelinePage,
+)
 from packages.models.http import ErrorResponse, HealthResponse
 from packages.models.incidents import (
     AlertIngestResponse,
@@ -28,9 +42,12 @@ from packages.models.incidents import (
     QueueJobStatus,
 )
 from packages.persistence import (
+    DeploymentConflict,
+    EvidenceStoreUnavailable,
     IncidentStoreUnavailable,
     IngestBatch,
     PendingQueueJob,
+    SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
 )
 from packages.task_queue import CeleryIncidentPublisher, JobPublishError, RedisDependency
@@ -116,6 +133,38 @@ class IncidentJobPublisher(Protocol):
     async def publish(self, *, job_id: UUID, incident_id: str) -> None: ...
 
 
+class EvidenceApiStore(Protocol):
+    """Evidence and local deployment operations exposed by the HTTP API."""
+
+    async def register_deployment(
+        self,
+        registration: DeploymentRegistration,
+    ) -> DeploymentRegistrationResponse: ...
+
+    async def list_deployments(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        service: EvidenceService | None = None,
+        environment: DeploymentEnvironment | None = None,
+    ) -> DeploymentPage: ...
+
+    async def list_evidence(
+        self,
+        incident_id: str,
+        *,
+        limit: int,
+        offset: int,
+        source: EvidenceSource | None = None,
+        status: CollectionStatus | None = None,
+    ) -> EvidencePage: ...
+
+    async def all_evidence(self, incident_id: str) -> tuple[EvidenceItem, ...]: ...
+
+    async def close(self) -> None: ...
+
+
 class QueueReadiness(Protocol):
     """Direct Redis dependency owned by Incident API readiness."""
 
@@ -130,6 +179,7 @@ def create_app(
     store: IncidentStore | None = None,
     publisher: IncidentJobPublisher | None = None,
     queue_dependency: QueueReadiness | None = None,
+    evidence_store: EvidenceApiStore | None = None,
 ) -> FastAPI:
     """Build the Incident API with injectable persistence and queue boundaries."""
 
@@ -146,8 +196,12 @@ def create_app(
     )
     resolved_publisher = publisher or CeleryIncidentPublisher(resolved_settings)
     resolved_queue: QueueReadiness = queue_dependency or RedisDependency(resolved_settings)
+    resolved_evidence_store: EvidenceApiStore = evidence_store or SqlAlchemyEvidenceStore(
+        resolved_settings
+    )
     register_shutdown_callback(app, resolved_store.close)
     register_shutdown_callback(app, resolved_queue.close)
+    register_shutdown_callback(app, resolved_evidence_store.close)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:
@@ -293,6 +347,95 @@ def create_app(
         except IncidentStoreUnavailable as error:
             raise ApiError(
                 503, "persistence_unavailable", "incident persistence is unavailable"
+            ) from error
+
+    @app.get(
+        "/api/v1/incidents/{incident_id}/evidence",
+        response_model=EvidencePage,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_evidence(
+        incident_id: IncidentId,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+        source: Annotated[EvidenceSource | None, Query()] = None,
+        collection_status: Annotated[
+            CollectionStatus | None,
+            Query(alias="status"),
+        ] = None,
+    ) -> EvidencePage:
+        await _require_incident(resolved_store, incident_id)
+        try:
+            return await resolved_evidence_store.list_evidence(
+                incident_id,
+                limit=limit,
+                offset=offset,
+                source=source,
+                status=collection_status,
+            )
+        except EvidenceStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "evidence persistence is unavailable"
+            ) from error
+
+    @app.get(
+        "/api/v1/incidents/{incident_id}/evidence/timeline",
+        response_model=EvidenceTimelinePage,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_evidence_timeline(
+        incident_id: IncidentId,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    ) -> EvidenceTimelinePage:
+        await _require_incident(resolved_store, incident_id)
+        try:
+            evidence = await resolved_evidence_store.all_evidence(incident_id)
+        except EvidenceStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "evidence persistence is unavailable"
+            ) from error
+        return correlate_timeline(evidence, limit=limit, offset=offset)
+
+    @app.post(
+        "/api/v1/deployments",
+        response_model=DeploymentRegistrationResponse,
+        status_code=status.HTTP_201_CREATED,
+        responses={409: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def register_deployment(
+        registration: DeploymentRegistration,
+    ) -> DeploymentRegistrationResponse:
+        try:
+            return await resolved_evidence_store.register_deployment(registration)
+        except DeploymentConflict as error:
+            raise ApiError(409, "deployment_conflict", str(error)) from error
+        except EvidenceStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "deployment persistence is unavailable"
+            ) from error
+
+    @app.get(
+        "/api/v1/deployments",
+        response_model=DeploymentPage,
+        responses={503: {"model": ErrorResponse}},
+    )
+    async def list_deployments(
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+        service: Annotated[EvidenceService | None, Query()] = None,
+        environment: Annotated[DeploymentEnvironment | None, Query()] = None,
+    ) -> DeploymentPage:
+        try:
+            return await resolved_evidence_store.list_deployments(
+                limit=limit,
+                offset=offset,
+                service=service,
+                environment=environment,
+            )
+        except EvidenceStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "deployment persistence is unavailable"
             ) from error
 
     @app.get(

@@ -13,9 +13,10 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.config import Settings
 from packages.incidents import normalize_webhook
-from packages.incidents.worker import PlaceholderInvestigationService, WorkerExecutionStatus
+from packages.incidents.worker import EvidenceInvestigationService, WorkerExecutionStatus
 from packages.models.alerts import AlertmanagerWebhook
 from packages.models.checkout import PaymentRequest
+from packages.models.evidence import EvidenceSource, SourceCollectionSummary
 from packages.models.incidents import IncidentStatus, QueueJobStatus
 from packages.persistence import (
     IdempotencyConflict,
@@ -36,7 +37,7 @@ def test_migration_graph_has_one_current_head() -> None:
 
     script = ScriptDirectory.from_config(Config("alembic.ini"))
 
-    assert script.get_heads() == ["20260902_0002"]
+    assert script.get_heads() == ["20260903_0003"]
 
 
 async def _inspect_schema(database_url: str) -> dict[str, Any]:
@@ -89,7 +90,7 @@ def test_migration_applies_to_empty_database_and_is_repeatable(
 def test_incident_migration_upgrades_from_prior_revision(
     migrated_test_database_url: str,
 ) -> None:
-    """A populated Stage 01 revision can move to Stage 04 without auto-create."""
+    """A populated Stage 01 revision can move to Stage 3 without auto-create."""
 
     config = Config("alembic.ini")
     config.attributes["database_url"] = migrated_test_database_url
@@ -107,6 +108,8 @@ def test_incident_migration_upgrades_from_prior_revision(
             "investigation_runs",
             "queue_jobs",
             "audit_events",
+            "evidence",
+            "deployments",
         }.issubset(upgraded_schema["tables"])
         command.check(config)
     finally:
@@ -235,10 +238,14 @@ async def test_incident_store_concurrent_delivery_outbox_and_retry_idempotency(
         assert pending_status == QueueJobStatus.PENDING_PUBLISH.value
 
         await store.mark_job_published(pending.id)
-        worker = PlaceholderInvestigationService(store, settings)
+
+        async def collect(_claim: object) -> tuple[SourceCollectionSummary, ...]:
+            return (SourceCollectionSummary(source=EvidenceSource.PROMETHEUS, empty=1),)
+
+        worker = EvidenceInvestigationService(store, settings, operation=collect)  # type: ignore[arg-type]
         completed = await worker.execute(job_id=pending.id, incident_id=pending.incident_id)
         replay = await worker.execute(job_id=pending.id, incident_id=pending.incident_id)
-        assert completed.status == WorkerExecutionStatus.PLACEHOLDER_COMPLETE_NO_AI
+        assert completed.status == WorkerExecutionStatus.EVIDENCE_COLLECTED
         assert replay.status == WorkerExecutionStatus.SKIPPED_IDEMPOTENT
 
         resolved = await store.ingest(
@@ -265,7 +272,7 @@ async def test_incident_store_concurrent_delivery_outbox_and_retry_idempotency(
                 )
             )
         assert final_job_status == QueueJobStatus.COMPLETED.value
-        assert final_run_status == "placeholder_complete_no_ai"
+        assert final_run_status == "evidence_collected"
     finally:
         await store.close()
 

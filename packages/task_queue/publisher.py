@@ -1,6 +1,7 @@
 """Bounded Celery publisher and direct Redis readiness dependency."""
 
 import asyncio
+import inspect
 from uuid import UUID
 
 from celery import Celery  # type: ignore[import-untyped]
@@ -27,16 +28,26 @@ class CeleryIncidentPublisher:
         """Publish one JSON task without embedding an alert payload."""
 
         try:
-            await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._celery.send_task,
-                    "incident.process_no_ai_placeholder",
-                    args=[incident_id],
-                    task_id=str(job_id),
-                    queue="incidents",
-                ),
-                timeout=self._timeout,
-            )
+            sender = self._celery.send_task
+            options = {
+                "args": [incident_id],
+                "task_id": str(job_id),
+                "queue": "incidents",
+            }
+            if inspect.iscoroutinefunction(sender):
+                await asyncio.wait_for(
+                    sender("incident.collect_evidence", **options),
+                    timeout=self._timeout,
+                )
+            else:
+                await asyncio.wait_for(
+                    asyncio.to_thread(
+                        sender,
+                        "incident.collect_evidence",
+                        **options,
+                    ),
+                    timeout=self._timeout,
+                )
         except (TimeoutError, OSError, OperationalError, RedisError) as error:
             raise JobPublishError("incident queue publication failed") from error
 

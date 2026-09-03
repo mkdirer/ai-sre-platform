@@ -65,6 +65,24 @@ class Settings(BaseSettings):
     investigation_retry_max_seconds: Annotated[int, Field(ge=1, le=3_600)] = 30
     investigation_job_lease_seconds: Annotated[int, Field(ge=5, le=3_600)] = 15
     celery_visibility_timeout_seconds: Annotated[int, Field(ge=30, le=86_400)] = 300
+    prometheus_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:9090")
+    loki_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:3100")
+    tempo_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:3200")
+    evidence_http_timeout_seconds: Annotated[float, Field(gt=0, le=10)] = 2.0
+    evidence_http_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
+    evidence_http_retry_backoff_seconds: Annotated[float, Field(ge=0, le=1)] = 0.05
+    evidence_source_timeout_seconds: Annotated[float, Field(gt=0, le=30)] = 8.0
+    evidence_max_response_bytes: Annotated[int, Field(ge=1_024, le=10_485_760)] = 2_097_152
+    evidence_max_window_seconds: Annotated[int, Field(ge=60, le=21_600)] = 3_600
+    evidence_max_lookback_seconds: Annotated[int, Field(ge=300, le=86_400)] = 21_600
+    evidence_future_skew_seconds: Annotated[int, Field(ge=0, le=900)] = 300
+    evidence_deployment_lookback_seconds: Annotated[int, Field(ge=300, le=86_400)] = 7_200
+    evidence_metric_step_seconds: Annotated[int, Field(ge=1, le=300)] = 5
+    evidence_log_limit: Annotated[int, Field(ge=1, le=100)] = 50
+    evidence_trace_limit: Annotated[int, Field(ge=1, le=20)] = 10
+    evidence_deployment_limit: Annotated[int, Field(ge=1, le=50)] = 10
+    evidence_correlation_limit: Annotated[int, Field(ge=100, le=5_000)] = 1_000
+    evidence_slow_trace_threshold_ms: Annotated[int, Field(ge=1, le=60_000)] = 500
     outbound_http_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 5.0
     outbound_http_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
     outbound_http_retry_backoff_seconds: Annotated[float, Field(ge=0, le=1)] = 0.05

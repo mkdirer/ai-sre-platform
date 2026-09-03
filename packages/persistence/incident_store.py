@@ -96,6 +96,10 @@ class WorkerClaim:
     incident_id: str
     incident_title: str
     service: str
+    affected_services: tuple[str, ...]
+    started_at: datetime
+    investigation_window_start: datetime
+    investigation_window_end: datetime
     attempt: int
     max_attempts: int
 
@@ -322,7 +326,7 @@ class SqlAlchemyIncidentStore:
             InvestigationRunRow(
                 id=run_id,
                 incident_id=incident_id,
-                stage="no_ai_placeholder",
+                stage="evidence_collection",
                 status=InvestigationRunStatus.QUEUED.value,
                 attempt=0,
                 created_at=now,
@@ -345,11 +349,11 @@ class SqlAlchemyIncidentStore:
         self._add_audit(
             session,
             incident_id=incident_id,
-            event_type="investigation.placeholder_queued",
+            event_type="investigation.evidence_collection_queued",
             actor="incident-api",
             from_status=None,
             to_status=None,
-            details={"run_id": str(run_id), "job_id": str(job_id), "stage": "no_ai_placeholder"},
+            details={"run_id": str(run_id), "job_id": str(job_id), "stage": "evidence_collection"},
         )
         return PendingQueueJob(id=job_id, incident_id=incident_id)
 
@@ -495,7 +499,7 @@ class SqlAlchemyIncidentStore:
                     self._add_audit(
                         session,
                         incident_id=incident.id,
-                        event_type="investigation.placeholder_skipped_terminal",
+                        event_type="investigation.evidence_collection_skipped_terminal",
                         actor="investigator-worker",
                         from_status=None,
                         to_status=None,
@@ -510,7 +514,7 @@ class SqlAlchemyIncidentStore:
                         incident,
                         IncidentStatus.INVESTIGATING,
                         actor="investigator-worker",
-                        event_type="investigation.placeholder_started",
+                        event_type="investigation.evidence_collection_started",
                         now=now,
                     )
                 elif incident_status != IncidentStatus.INVESTIGATING:
@@ -524,6 +528,7 @@ class SqlAlchemyIncidentStore:
                 job.lease_expires_at = lease_expires_at
                 job.updated_at = now
                 run.status = InvestigationRunStatus.RUNNING.value
+                run.stage = "evidence_collection"
                 run.attempt = job.attempts
                 run.error_type = None
                 run.error_message = None
@@ -544,8 +549,13 @@ class SqlAlchemyIncidentStore:
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailable("could not claim investigation job") from error
 
-    async def complete_placeholder_job(self, job_id: UUID) -> None:
-        """Idempotently mark the explicit no-AI placeholder run complete."""
+    async def complete_evidence_job(
+        self,
+        job_id: UUID,
+        *,
+        source_summaries: list[dict[str, object]],
+    ) -> None:
+        """Idempotently mark deterministic evidence collection complete."""
 
         now = datetime.now(UTC)
         try:
@@ -571,13 +581,14 @@ class SqlAlchemyIncidentStore:
                 job.lease_expires_at = None
                 job.next_retry_at = None
                 job.updated_at = now
-                run.status = InvestigationRunStatus.PLACEHOLDER_COMPLETE_NO_AI.value
+                run.stage = "evidence_collection"
+                run.status = InvestigationRunStatus.EVIDENCE_COLLECTED.value
                 run.completed_at = now
                 run.updated_at = now
                 self._add_audit(
                     session,
                     incident_id=job.incident_id,
-                    event_type="investigation.placeholder_completed_no_ai",
+                    event_type="investigation.evidence_collection_completed",
                     actor="investigator-worker",
                     from_status=None,
                     to_status=None,
@@ -585,12 +596,13 @@ class SqlAlchemyIncidentStore:
                         "job_id": str(job.id),
                         "run_id": str(run.id),
                         "ai_executed": False,
+                        "sources": source_summaries,
                     },
                 )
         except QueueJobNotFound:
             raise
         except SQLAlchemyError as error:
-            raise IncidentStoreUnavailable("could not complete placeholder job") from error
+            raise IncidentStoreUnavailable("could not complete evidence job") from error
 
     async def record_job_failure(
         self,
@@ -791,7 +803,7 @@ class SqlAlchemyIncidentStore:
         limit: int,
         offset: int,
     ) -> InvestigationRunPage:
-        """Return newest-first placeholder run history for an incident."""
+        """Return newest-first investigation run history for an incident."""
 
         filters = [InvestigationRunRow.incident_id == incident_id]
         try:
@@ -933,6 +945,10 @@ class SqlAlchemyIncidentStore:
             incident_id=incident.id,
             incident_title=incident.title,
             service=incident.service,
+            affected_services=tuple(incident.affected_services),
+            started_at=incident.started_at,
+            investigation_window_start=incident.investigation_window_start,
+            investigation_window_end=incident.investigation_window_end,
             attempt=job.attempts,
             max_attempts=job.max_attempts,
         )

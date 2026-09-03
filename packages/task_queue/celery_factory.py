@@ -36,7 +36,10 @@ def create_celery_app(settings: Settings, *, include_worker: bool = False) -> Ce
         task_acks_on_failure_or_timeout=True,
         task_default_queue="incidents",
         task_reject_on_worker_lost=True,
-        task_routes={"incident.process_no_ai_placeholder": {"queue": "incidents"}},
+        task_routes={
+            "incident.collect_evidence": {"queue": "incidents"},
+            "incident.process_no_ai_placeholder": {"queue": "incidents"},
+        },
         task_serializer="json",
         task_track_started=True,
         worker_prefetch_multiplier=1,

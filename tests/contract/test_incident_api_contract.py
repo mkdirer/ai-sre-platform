@@ -1,4 +1,4 @@
-"""In-process typed contracts for the Stage 04 Incident API."""
+"""In-process typed contracts for the deterministic Incident API."""
 
 from datetime import UTC, datetime
 from uuid import UUID
@@ -8,6 +8,22 @@ import pytest
 
 from apps.incident_api.main import create_app
 from packages.config import Settings
+from packages.models.deployments import (
+    DeploymentPage,
+    DeploymentRecord,
+    DeploymentRegistration,
+    DeploymentRegistrationResponse,
+)
+from packages.models.evidence import (
+    CollectionStatus,
+    EvidenceItem,
+    EvidencePage,
+    EvidenceSource,
+    EvidenceTimelinePage,
+    EvidenceType,
+    EvidenceWindow,
+    QueryTemplate,
+)
 from packages.models.http import ErrorResponse, HealthResponse
 from packages.models.incidents import (
     AlertAcceptance,
@@ -182,16 +198,89 @@ class _FakeQueueDependency:
         self.closed = True
 
 
+def _evidence_item() -> EvidenceItem:
+    return EvidenceItem(
+        id="EVD-A1B2C3D4E5F6070811223344",
+        incident_id=INCIDENT_ID,
+        source=EvidenceSource.PROMETHEUS,
+        type=EvidenceType.METRIC,
+        status=CollectionStatus.COLLECTED,
+        observed_at=NOW,
+        window=EvidenceWindow(start=NOW, end=NOW),
+        summary="Payment p95 latency is 2.5 seconds",
+        payload={"value": 2.5},
+        query_template=QueryTemplate.METRIC_SERVICE_LATENCY,
+        query_parameters={"service": "payment-service"},
+        provenance={"adapter": "prometheus"},
+        payload_sha256="b" * 64,
+        collected_at=NOW,
+        created_at=NOW,
+        updated_at=NOW,
+    )
+
+
+class _FakeEvidenceStore:
+    def __init__(self) -> None:
+        self.closed = False
+        self.evidence_reads = 0
+
+    async def register_deployment(
+        self,
+        registration: DeploymentRegistration,
+    ) -> DeploymentRegistrationResponse:
+        return DeploymentRegistrationResponse(
+            deployment=DeploymentRecord(
+                **registration.model_dump(),
+                id="DEP-A1B2C3D4E5F607081122",
+                registered_at=NOW,
+            ),
+            created=True,
+        )
+
+    async def list_deployments(
+        self,
+        *,
+        limit: int,
+        offset: int,
+        service: object = None,
+        environment: object = None,
+    ) -> DeploymentPage:
+        del service, environment
+        return DeploymentPage(items=[], total=0, limit=limit, offset=offset)
+
+    async def list_evidence(
+        self,
+        _incident_id: str,
+        *,
+        limit: int,
+        offset: int,
+        source: object = None,
+        status: object = None,
+    ) -> EvidencePage:
+        del source, status
+        self.evidence_reads += 1
+        return EvidencePage(items=[_evidence_item()], total=1, limit=limit, offset=offset)
+
+    async def all_evidence(self, _incident_id: str) -> tuple[EvidenceItem, ...]:
+        self.evidence_reads += 1
+        return (_evidence_item(),)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def _client(
     store: _FakeStore,
     publisher: _FakePublisher | None = None,
     queue: _FakeQueueDependency | None = None,
+    evidence_store: _FakeEvidenceStore | None = None,
 ) -> httpx.AsyncClient:
     app = create_app(
         Settings(_env_file=None, environment="test"),
         store=store,  # type: ignore[arg-type]
         publisher=publisher or _FakePublisher(),
         queue_dependency=queue or _FakeQueueDependency(),
+        evidence_store=evidence_store or _FakeEvidenceStore(),  # type: ignore[arg-type]
     )
     return httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
@@ -256,6 +345,36 @@ async def test_incident_reads_are_paginated_typed_and_not_found_is_stable() -> N
 
 
 @pytest.mark.asyncio
+async def test_evidence_timeline_and_deployment_registration_are_typed_and_isolated() -> None:
+    """Stage 3 evidence stays incident-owned and deployments use a bounded typed API."""
+
+    store = _FakeStore()
+    evidence_store = _FakeEvidenceStore()
+    deployment = {
+        "service": "payment-service",
+        "environment": "test",
+        "version": "0.2.0",
+        "deployed_at": NOW.isoformat(),
+        "commit_sha": "a" * 40,
+        "changed_files": ["apps/demo/payment_service/main.py"],
+        "metadata": {"scenario": "contract"},
+    }
+    async with _client(store, evidence_store=evidence_store) as client:
+        evidence_response = await client.get(f"/api/v1/incidents/{INCIDENT_ID}/evidence")
+        timeline_response = await client.get(f"/api/v1/incidents/{INCIDENT_ID}/evidence/timeline")
+        registration_response = await client.post("/api/v1/deployments", json=deployment)
+        missing_response = await client.get("/api/v1/incidents/INC-0000000000000000/evidence")
+
+    assert EvidencePage.model_validate(evidence_response.json()).total == 1
+    assert EvidenceTimelinePage.model_validate(timeline_response.json()).total == 1
+    registered = DeploymentRegistrationResponse.model_validate(registration_response.json())
+    assert registration_response.status_code == 201
+    assert registered.deployment.commit_sha == "a" * 40
+    assert missing_response.status_code == 404
+    assert evidence_store.evidence_reads == 2
+
+
+@pytest.mark.asyncio
 async def test_readiness_checks_postgres_and_redis_but_liveness_does_not() -> None:
     """The queue is a direct readiness dependency while liveness remains process-only."""
 
@@ -291,14 +410,15 @@ async def test_invalid_alert_identity_never_reaches_persistence() -> None:
     assert store.ingest_calls == 0
 
 
-def test_openapi_documents_only_current_incident_stage_endpoints_and_example() -> None:
-    """OpenAPI exposes Stage 04 reads/ingestion without later evidence or approval APIs."""
+def test_openapi_documents_current_evidence_endpoints_without_later_stage_apis() -> None:
+    """OpenAPI exposes Stage 3 evidence/deployments but no AI or approval APIs."""
 
     app = create_app(
         Settings(_env_file=None, environment="test"),
         store=_FakeStore(),  # type: ignore[arg-type]
         publisher=_FakePublisher(),
         queue_dependency=_FakeQueueDependency(),
+        evidence_store=_FakeEvidenceStore(),  # type: ignore[arg-type]
     )
     schema = app.openapi()
     paths = schema["paths"]
@@ -306,7 +426,9 @@ def test_openapi_documents_only_current_incident_stage_endpoints_and_example() -
     assert "/api/v1/alerts" in paths
     assert "/api/v1/incidents" in paths
     assert "/api/v1/incidents/{incident_id}/timeline" in paths
-    assert "/api/v1/incidents/{incident_id}/evidence" not in paths
+    assert "/api/v1/incidents/{incident_id}/evidence" in paths
+    assert "/api/v1/incidents/{incident_id}/evidence/timeline" in paths
+    assert "/api/v1/deployments" in paths
     assert "/api/v1/incidents/{incident_id}/approve" not in paths
     request_body = paths["/api/v1/alerts"]["post"]["requestBody"]
     assert "firing" in request_body["content"]["application/json"]["examples"]

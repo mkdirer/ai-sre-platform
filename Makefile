@@ -3,8 +3,15 @@ UV_SYNC_FLAGS ?= --all-groups --locked
 COMPOSE ?= docker compose
 TEST_GATEWAY_URL ?= http://127.0.0.1:8001
 TEST_PAYMENT_URL ?= http://127.0.0.1:8004
+TEST_PROMETHEUS_URL ?= http://127.0.0.1:9090
+TEST_LOKI_URL ?= http://127.0.0.1:3100
+TEST_TEMPO_URL ?= http://127.0.0.1:3200
+TEST_ALERTMANAGER_URL ?= http://127.0.0.1:9093
+TEST_INCIDENT_API_URL ?= http://127.0.0.1:8006
+TEST_INVESTIGATOR_METRICS_URL ?= http://127.0.0.1:9464/metrics
 TEST_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre_test
 LIVE_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre
+FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
 	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
@@ -40,8 +47,16 @@ test:
 test-integration:
 	TEST_GATEWAY_URL="$(TEST_GATEWAY_URL)" \
 	TEST_PAYMENT_URL="$(TEST_PAYMENT_URL)" \
+	TEST_PROMETHEUS_URL="$(TEST_PROMETHEUS_URL)" \
+	TEST_LOKI_URL="$(TEST_LOKI_URL)" \
+	TEST_TEMPO_URL="$(TEST_TEMPO_URL)" \
+	TEST_ALERTMANAGER_URL="$(TEST_ALERTMANAGER_URL)" \
+	TEST_INCIDENT_API_URL="$(TEST_INCIDENT_API_URL)" \
+	TEST_INVESTIGATOR_METRICS_URL="$(TEST_INVESTIGATOR_METRICS_URL)" \
 	TEST_DATABASE_URL="$(TEST_DATABASE_URL)" \
 	LIVE_DATABASE_URL="$(LIVE_DATABASE_URL)" \
+	FAULT_CONTROL_TOKEN="$(FAULT_CONTROL_TOKEN)" \
+	RUN_LOCAL_EVIDENCE_INTEGRATION="true" \
 	$(UV) run pytest -q -m integration
 
 migrate:

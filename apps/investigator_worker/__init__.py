@@ -1,1 +1,1 @@
-"""Retry-safe Stage 04 investigator worker namespace."""
+"""Retry-safe Stage 05 deterministic evidence worker namespace."""

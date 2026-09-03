@@ -13,6 +13,10 @@ METRIC_LABEL_POLICY: dict[str, tuple[str, ...]] = {
     "demo_http_request_duration_seconds": ("service", "method", "route"),
     "demo_http_requests_in_progress": ("service", "method"),
     "demo_fault_enabled": ("service", "fault"),
+    "investigator_adapter_calls_total": ("source", "template", "outcome"),
+    "investigator_adapter_call_duration_seconds": ("source", "template"),
+    "investigator_evidence_collection_duration_seconds": ("outcome",),
+    "investigator_evidence_collection_errors_total": ("source", "outcome"),
 }
 _ALLOWED_METHODS = frozenset({"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"})
 _ROUTE_PATTERN = re.compile(r"^/[A-Za-z0-9_./{}-]{0,127}$")
@@ -83,6 +87,30 @@ class HttpMetrics:
             METRIC_LABEL_POLICY["demo_fault_enabled"],
             registry=self.registry,
         )
+        self._adapter_calls = Counter(
+            "investigator_adapter_calls_total",
+            "Completed fixed-template evidence adapter calls.",
+            METRIC_LABEL_POLICY["investigator_adapter_calls_total"],
+            registry=self.registry,
+        )
+        self._adapter_duration = Histogram(
+            "investigator_adapter_call_duration_seconds",
+            "Duration of fixed-template evidence adapter calls.",
+            METRIC_LABEL_POLICY["investigator_adapter_call_duration_seconds"],
+            registry=self.registry,
+        )
+        self._collection_duration = Histogram(
+            "investigator_evidence_collection_duration_seconds",
+            "Duration of deterministic incident evidence collection.",
+            METRIC_LABEL_POLICY["investigator_evidence_collection_duration_seconds"],
+            registry=self.registry,
+        )
+        self._collection_errors = Counter(
+            "investigator_evidence_collection_errors_total",
+            "Explicit unavailable, failed, or timed-out evidence operations.",
+            METRIC_LABEL_POLICY["investigator_evidence_collection_errors_total"],
+            registry=self.registry,
+        )
         self.set_slow_database_fault(enabled=False)
 
     def begin(self, method: str) -> None:
@@ -126,6 +154,32 @@ class HttpMetrics:
             service=self.service_name,
             fault="slow_database",
         ).set(1 if enabled else 0)
+
+    def observe_adapter_call(
+        self,
+        *,
+        source: str,
+        template: str,
+        outcome: str,
+        duration_seconds: float,
+    ) -> None:
+        """Record bounded adapter duration/outcome labels owned by repository enums."""
+
+        self._adapter_calls.labels(
+            source=source,
+            template=template,
+            outcome=outcome,
+        ).inc()
+        self._adapter_duration.labels(source=source, template=template).observe(
+            max(0.0, duration_seconds)
+        )
+        if outcome in {"unavailable", "failed", "timed_out"}:
+            self._collection_errors.labels(source=source, outcome=outcome).inc()
+
+    def observe_evidence_collection(self, *, outcome: str, duration_seconds: float) -> None:
+        """Record bounded total collection duration for a worker execution."""
+
+        self._collection_duration.labels(outcome=outcome).observe(max(0.0, duration_seconds))
 
 
 __all__ = [

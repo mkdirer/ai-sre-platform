@@ -1,4 +1,4 @@
-"""Bounded Milestone 1C slow-database and alert delivery scenario."""
+"""Bounded slow-database alert, incident, and deterministic evidence scenario."""
 
 import argparse
 import asyncio
@@ -11,6 +11,7 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -18,6 +19,15 @@ from pydantic import ValidationError
 
 from packages.incidents import alert_fingerprint
 from packages.models.checkout import CheckoutResponse
+from packages.models.deployments import DeploymentEnvironment
+from packages.models.evidence import (
+    CollectionStatus,
+    EvidenceItem,
+    EvidencePage,
+    EvidenceSource,
+    EvidenceTimelinePage,
+    QueryTemplate,
+)
 from packages.models.faults import FaultStateResponse
 from packages.models.incidents import (
     AlertIngestResponse,
@@ -59,6 +69,7 @@ class Arguments:
     tempo_url: str
     alertmanager_url: str
     incident_api_url: str
+    environment: DeploymentEnvironment
     fault_control_token: str
     traffic_count: int
     request_timeout_seconds: float
@@ -82,15 +93,79 @@ class IncidentBaseline:
     occurrence_count: int
     run_ids: frozenset[str]
     job_ids: frozenset[str]
+    evidence_ids: frozenset[str]
 
 
 @dataclass(frozen=True)
 class IncidentEvidence:
-    """Durable incident, completed placeholder run, and queue-job proof."""
+    """Durable incident, completed evidence run, and queue-job proof."""
 
     incident: IncidentDetail
     run_id: str
     job_id: str
+    source_summary: str
+
+
+async def _all_incident_evidence(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+    incident_id: str,
+) -> tuple[EvidenceItem, ...]:
+    """Read every bounded public page so repeated scenario runs cannot hide new evidence."""
+
+    items: list[EvidenceItem] = []
+    offset = 0
+    while True:
+        response = await client.get(
+            f"{arguments.incident_api_url}/api/v1/incidents/{incident_id}/evidence",
+            params={"limit": "100", "offset": str(offset)},
+        )
+        _require_success(response, "Incident API evidence")
+        page = EvidencePage.model_validate(response.json())
+        if page.total > 5_000:
+            raise RuntimeError("incident evidence exceeds the scenario safety bound")
+        items.extend(page.items)
+        if len(items) >= page.total:
+            return tuple(items)
+        if not page.items:
+            raise RuntimeError("Incident API evidence pagination made no progress")
+        offset += len(page.items)
+
+
+async def _register_demo_deployments(
+    client: httpx.AsyncClient,
+    arguments: Arguments,
+) -> None:
+    """Register neutral local version history through the public deterministic API."""
+
+    anchor = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    deployments = (
+        {
+            "service": "payment-service",
+            "environment": arguments.environment.value,
+            "version": "0.0.9",
+            "deployed_at": (anchor - timedelta(minutes=90)).isoformat(),
+            "commit_sha": "1" * 40,
+            "changed_files": ["apps/demo/payment_service/main.py"],
+            "metadata": {"scenario": "slow_database", "role": "previous_baseline"},
+        },
+        {
+            "service": "payment-service",
+            "environment": arguments.environment.value,
+            "version": "0.1.0",
+            "deployed_at": (anchor - timedelta(minutes=10)).isoformat(),
+            "commit_sha": "2" * 40,
+            "changed_files": ["apps/demo/payment_service/faults.py"],
+            "metadata": {"scenario": "slow_database", "role": "current_baseline"},
+        },
+    )
+    for deployment in deployments:
+        response = await client.post(
+            f"{arguments.incident_api_url}/api/v1/deployments",
+            json=deployment,
+        )
+        _require_success(response, "demo deployment registration")
+    print("deployments registered=true service=payment-service versions=0.0.9,0.1.0")
 
 
 def _bounded_count(value: str) -> int:
@@ -147,6 +222,11 @@ def parse_arguments() -> Arguments:
         ),
     )
     parser.add_argument(
+        "--environment",
+        choices=[environment.value for environment in DeploymentEnvironment],
+        default=os.getenv("ENVIRONMENT", DeploymentEnvironment.DEVELOPMENT.value),
+    )
+    parser.add_argument(
         "--traffic-count",
         type=_bounded_count,
         default=_bounded_count(os.getenv("SCENARIO_TRAFFIC_COUNT", "8")),
@@ -165,6 +245,7 @@ def parse_arguments() -> Arguments:
         tempo_url=str(parsed.tempo_url).rstrip("/"),
         alertmanager_url=str(parsed.alertmanager_url).rstrip("/"),
         incident_api_url=str(parsed.incident_api_url).rstrip("/"),
+        environment=DeploymentEnvironment(str(parsed.environment)),
         fault_control_token=token,
         traffic_count=int(parsed.traffic_count),
         request_timeout_seconds=float(parsed.request_timeout),
@@ -256,14 +337,14 @@ async def _checkout(
     label: str,
 ) -> CheckoutEvidence:
     suffix = uuid4().hex
-    request_id = f"stage03-{label}-{suffix}"
+    request_id = f"stage05-{label}-{suffix}"
     started_at_ns = time.time_ns() - 1_000_000_000
     started_at = time.perf_counter()
     response = await client.post(
         f"{arguments.gateway_url}/checkout",
         json={"customer_id": "stage03-customer", "sku": "widget-001", "quantity": 1},
         headers={
-            "Idempotency-Key": f"stage03-{label}-{suffix}",
+            "Idempotency-Key": f"stage05-{label}-{suffix}",
             "X-Request-ID": request_id,
         },
     )
@@ -557,7 +638,12 @@ async def _incident_baseline(
 ) -> IncidentBaseline:
     incident = await _matching_incident(client, arguments, fingerprint=fingerprint)
     if incident is None:
-        return IncidentBaseline(occurrence_count=0, run_ids=frozenset(), job_ids=frozenset())
+        return IncidentBaseline(
+            occurrence_count=0,
+            run_ids=frozenset(),
+            job_ids=frozenset(),
+            evidence_ids=frozenset(),
+        )
     runs_response = await client.get(
         f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/investigation-runs",
         params={"limit": "100"},
@@ -570,10 +656,12 @@ async def _incident_baseline(
     _require_success(jobs_response, "Incident API baseline jobs")
     runs = InvestigationRunPage.model_validate(runs_response.json())
     jobs = QueueJobPage.model_validate(jobs_response.json())
+    evidence = await _all_incident_evidence(client, arguments, incident.id)
     return IncidentBaseline(
         occurrence_count=incident.occurrence_count,
         run_ids=frozenset(str(run.id) for run in runs.items),
         job_ids=frozenset(str(job.id) for job in jobs.items),
+        evidence_ids=frozenset(item.id for item in evidence),
     )
 
 
@@ -604,17 +692,24 @@ async def _wait_for_incident_processed(
             f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/timeline",
             params={"limit": "100"},
         )
+        evidence_timeline_response = await client.get(
+            f"{arguments.incident_api_url}/api/v1/incidents/{incident.id}/evidence/timeline",
+            params={"limit": "100"},
+        )
         _require_success(runs_response, "Incident API investigation runs")
         _require_success(jobs_response, "Incident API queue jobs")
         _require_success(timeline_response, "Incident API timeline")
+        _require_success(evidence_timeline_response, "Incident API evidence timeline")
         runs = InvestigationRunPage.model_validate(runs_response.json())
         jobs = QueueJobPage.model_validate(jobs_response.json())
         timeline = AuditEventPage.model_validate(timeline_response.json())
+        evidence_items = await _all_incident_evidence(client, arguments, incident.id)
+        evidence_timeline = EvidenceTimelinePage.model_validate(evidence_timeline_response.json())
         completed_runs = [
             run
             for run in runs.items
             if str(run.id) not in baseline.run_ids
-            and run.status == InvestigationRunStatus.PLACEHOLDER_COMPLETE_NO_AI
+            and run.status == InvestigationRunStatus.EVIDENCE_COLLECTED
         ]
         completed_jobs = [
             job
@@ -623,26 +718,84 @@ async def _wait_for_incident_processed(
         ]
         if not completed_runs or not completed_jobs:
             raise ValueError(
-                "placeholder not complete yet: "
+                "evidence collection not complete yet: "
                 f"run_statuses={[run.status for run in runs.items]} "
                 f"job_statuses={[job.status for job in jobs.items]}"
             )
         if not any(
-            event.event_type == "investigation.placeholder_completed_no_ai"
+            event.event_type == "investigation.evidence_collection_completed"
             and event.details.get("ai_executed") is False
             for event in timeline.items
         ):
-            raise ValueError("timeline lacks the explicit no-AI completion event")
+            raise ValueError("timeline lacks the explicit deterministic evidence completion event")
+        new_evidence = [item for item in evidence_items if item.id not in baseline.evidence_ids]
+        expected_sources = set(EvidenceSource)
+        actual_sources = {item.source for item in new_evidence}
+        if actual_sources != expected_sources:
+            raise ValueError(
+                "evidence sources are incomplete: "
+                f"expected={sorted(source.value for source in expected_sources)} "
+                f"actual={sorted(source.value for source in actual_sources)}"
+            )
+        sources_without_collected_evidence = {
+            source
+            for source in expected_sources
+            if not any(
+                item.source == source and item.status == CollectionStatus.COLLECTED
+                for item in new_evidence
+            )
+        }
+        if sources_without_collected_evidence:
+            raise ValueError(
+                "controlled scenario produced no collected evidence for: "
+                + ",".join(sorted(source.value for source in sources_without_collected_evidence))
+            )
+        required_collected_templates = {
+            QueryTemplate.METRIC_SERVICE_LATENCY,
+            QueryTemplate.LOG_GROUPED_PATTERNS,
+            QueryTemplate.LOG_AROUND_TIMESTAMP,
+            QueryTemplate.TRACE_SLOW_SERVICE,
+            QueryTemplate.TRACE_SERVICE_DEPENDENCIES,
+            QueryTemplate.DEPLOYMENT_RECENT,
+            QueryTemplate.DEPLOYMENT_CURRENT_PREVIOUS,
+        }
+        collected_templates = {
+            item.query_template
+            for item in new_evidence
+            if item.status == CollectionStatus.COLLECTED
+        }
+        if missing_templates := required_collected_templates - collected_templates:
+            raise ValueError(
+                "controlled scenario lacks collected domain evidence for: "
+                + ",".join(sorted(template.value for template in missing_templates))
+            )
+        if not evidence_timeline.items:
+            raise ValueError("evidence timeline contains no correlated events")
+        timeline_keys = [
+            (event.timestamp, event.source.value, event.evidence_id, event.id)
+            for event in evidence_timeline.items
+        ]
+        if timeline_keys != sorted(timeline_keys):
+            raise RuntimeError("evidence timeline ordering is not deterministic")
         if incident.root_cause is not None or incident.confidence is not None:
-            raise RuntimeError("Stage 04 placeholder fabricated an AI investigation result")
+            raise RuntimeError("deterministic evidence collection fabricated an AI result")
+        status_counts: dict[str, dict[str, int]] = {}
+        for item in new_evidence:
+            source_counts = status_counts.setdefault(item.source.value, {})
+            source_counts[item.status.value] = source_counts.get(item.status.value, 0) + 1
+        source_summary = ";".join(
+            f"{source}=" + ",".join(f"{status}:{count}" for status, count in sorted(counts.items()))
+            for source, counts in sorted(status_counts.items())
+        )
         return IncidentEvidence(
             incident=incident,
             run_id=str(completed_runs[0].id),
             job_id=str(completed_jobs[0].id),
+            source_summary=source_summary,
         )
 
     return await _wait_for(
-        "durable incident and processed no-AI placeholder",
+        "durable incident and deterministic evidence collection",
         deadline_seconds=arguments.poll_deadline_seconds,
         probe=probe,
     )
@@ -678,7 +831,7 @@ async def _prove_duplicate_delivery(
         response = await client.post(
             f"{arguments.incident_api_url}/api/v1/alerts",
             json=webhook,
-            headers={"X-Request-ID": f"stage04-duplicate-{attempt + 1}"},
+            headers={"X-Request-ID": f"stage05-duplicate-{attempt + 1}"},
         )
         _require_success(response, "duplicate Alertmanager delivery")
         body = AlertIngestResponse.model_validate(response.json())
@@ -704,7 +857,7 @@ async def _prove_duplicate_delivery(
     runs = InvestigationRunPage.model_validate(runs_response.json())
     jobs = QueueJobPage.model_validate(jobs_response.json())
     if sum(str(run.id) == evidence.run_id for run in runs.items) != 1:
-        raise RuntimeError("duplicate delivery changed the placeholder run")
+        raise RuntimeError("duplicate delivery changed the evidence run")
     if sum(str(job.id) == evidence.job_id for job in jobs.items) != 1:
         raise RuntimeError("duplicate delivery changed the queue job")
 
@@ -736,7 +889,7 @@ async def _wait_for_incident_resolved(
 
 
 async def run_scenario(arguments: Arguments) -> None:
-    """Prove fault, alert, durable deduplication, async placeholder, and recovery."""
+    """Prove fault, alert, durable evidence collection, deduplication, and recovery."""
 
     timeout = httpx.Timeout(arguments.request_timeout_seconds)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -756,6 +909,8 @@ async def run_scenario(arguments: Arguments) -> None:
                 url=url,
                 deadline_seconds=arguments.poll_deadline_seconds,
             )
+
+        await _register_demo_deployments(client, arguments)
 
         await _set_fault(client, arguments, enabled=False)
         await _wait_for_alert_recovery(client, arguments)
@@ -842,7 +997,8 @@ async def run_scenario(arguments: Arguments) -> None:
                 f"p95_seconds={p95:.3f} incident_id={incident_evidence.incident.id} "
                 f"occurrences={incident_evidence.incident.occurrence_count} "
                 f"run_id={incident_evidence.run_id} job_id={incident_evidence.job_id} "
-                "placeholder=placeholder_complete_no_ai duplicate_delivery=idempotent"
+                f"evidence=evidence_collected sources={incident_evidence.source_summary} "
+                "ai_executed=false duplicate_delivery=idempotent"
             )
 
         recovered = await _checkout(client, arguments, label="recovery")
