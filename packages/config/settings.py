@@ -83,6 +83,35 @@ class Settings(BaseSettings):
     evidence_deployment_limit: Annotated[int, Field(ge=1, le=50)] = 10
     evidence_correlation_limit: Annotated[int, Field(ge=100, le=5_000)] = 1_000
     evidence_slow_trace_threshold_ms: Annotated[int, Field(ge=1, le=60_000)] = 500
+    investigator_enabled: bool = False
+    investigator_provider: Annotated[
+        str,
+        StringConstraints(pattern=r"^[a-z][a-z0-9_-]{1,31}$"),
+    ] = "openai"
+    investigator_planning_model: Annotated[
+        str,
+        StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"),
+    ] = "gpt-5-mini"
+    investigator_reasoning_model: Annotated[
+        str,
+        StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"),
+    ] = "gpt-5-mini"
+    openai_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    investigator_model_timeout_seconds: Annotated[float, Field(gt=0, le=120)] = 30.0
+    investigator_model_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
+    investigator_model_retry_backoff_seconds: Annotated[float, Field(ge=0, le=5)] = 0.25
+    investigator_max_output_tokens_per_call: Annotated[int, Field(ge=64, le=16_384)] = 2_048
+    investigator_max_model_calls: Annotated[int, Field(ge=1, le=50)] = 16
+    investigator_max_tool_calls: Annotated[int, Field(ge=12, le=50)] = 16
+    investigator_max_iterations: Annotated[int, Field(ge=1, le=5)] = 2
+    investigator_max_context_chars: Annotated[int, Field(ge=2_048, le=200_000)] = 30_000
+    investigator_max_total_tokens: Annotated[int, Field(ge=1_000, le=1_000_000)] = 50_000
+    investigator_max_duration_seconds: Annotated[float, Field(gt=1, le=600)] = 120.0
+    investigator_max_estimated_cost_usd: Annotated[float, Field(ge=0, le=100)] = 2.0
+    investigator_input_cost_per_million_usd: Annotated[float, Field(ge=0, le=1_000)] = 0.0
+    investigator_output_cost_per_million_usd: Annotated[float, Field(ge=0, le=1_000)] = 0.0
+    investigator_root_confidence_threshold: Annotated[float, Field(ge=0.5, le=0.95)] = 0.65
+    investigator_min_competing_hypotheses: Annotated[int, Field(ge=3, le=5)] = 3
     outbound_http_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 5.0
     outbound_http_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
     outbound_http_retry_backoff_seconds: Annotated[float, Field(ge=0, le=1)] = 0.05

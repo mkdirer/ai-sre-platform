@@ -43,12 +43,15 @@ class IncidentSeverity(StrEnum):
 
 
 class InvestigationRunStatus(StrEnum):
-    """Observable states for deterministic pre-AI investigation work."""
+    """Observable states for deterministic collection and AI investigation work."""
 
     QUEUED = "queued"
     RUNNING = "running"
     PLACEHOLDER_COMPLETE_NO_AI = "placeholder_complete_no_ai"
     EVIDENCE_COLLECTED = "evidence_collected"
+    REPORT_GENERATED = "report_generated"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     RETRY_SCHEDULED = "retry_scheduled"
     FAILED = "failed"
     DEAD_LETTERED = "dead_lettered"
@@ -131,7 +134,7 @@ class IncidentSummary(BaseModel):
 
 
 class IncidentDetail(IncidentSummary):
-    """Current canonical incident state; AI report fields remain explicitly empty."""
+    """Current canonical incident state, including validated report conclusions when present."""
 
     investigation_window_start: datetime
     investigation_window_end: datetime
@@ -185,7 +188,7 @@ class InvestigationRunResponse(BaseModel):
     incident_id: IncidentId
     stage: Annotated[
         str,
-        StringConstraints(pattern=r"^(no_ai_placeholder|evidence_collection)$"),
+        StringConstraints(pattern=r"^(no_ai_placeholder|evidence_collection|ai_investigation)$"),
     ]
     status: InvestigationRunStatus
     attempt: Annotated[int, Field(ge=0)]

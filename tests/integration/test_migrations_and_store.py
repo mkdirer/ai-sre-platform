@@ -33,11 +33,11 @@ from packages.persistence.payment_store import PaymentRow
 
 
 def test_migration_graph_has_one_current_head() -> None:
-    """Stage 04 extends the single linear migration history."""
+    """Stage 06 extends the single linear migration history."""
 
     script = ScriptDirectory.from_config(Config("alembic.ini"))
 
-    assert script.get_heads() == ["20260903_0003"]
+    assert script.get_heads() == ["20260904_0004"]
 
 
 async def _inspect_schema(database_url: str) -> dict[str, Any]:

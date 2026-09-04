@@ -18,6 +18,13 @@ from packages.persistence.incident_rows import (  # noqa: F401
     InvestigationRunRow,
     QueueJobRow,
 )
+from packages.persistence.investigation_rows import (  # noqa: F401
+    HypothesisRow,
+    IncidentReportRow,
+    InvestigationFailureRow,
+    InvestigatorCallRow,
+    RecommendationRow,
+)
 from packages.persistence.payment_store import PaymentRow  # noqa: F401
 
 config = context.config

@@ -20,7 +20,7 @@ from packages.incidents.worker import (
 )
 from packages.models.alerts import AlertmanagerWebhook
 from packages.models.evidence import EvidenceSource, SourceCollectionSummary
-from packages.models.incidents import IncidentStatus
+from packages.models.incidents import IncidentSeverity, IncidentStatus
 from packages.persistence import WorkerClaim
 from packages.task_queue import CeleryIncidentPublisher
 from packages.telemetry import (
@@ -180,6 +180,7 @@ class _WorkerStore:
             incident_title="Payment latency",
             service="payment-service",
             affected_services=("payment-service",),
+            severity=IncidentSeverity.WARNING,
             started_at=NOW,
             investigation_window_start=NOW - timedelta(minutes=10),
             investigation_window_end=NOW + timedelta(minutes=5),

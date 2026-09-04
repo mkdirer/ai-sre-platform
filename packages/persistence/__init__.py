@@ -15,6 +15,10 @@ from packages.persistence.incident_store import (
     SqlAlchemyIncidentStore,
     WorkerClaim,
 )
+from packages.persistence.investigation_store import (
+    InvestigationStoreUnavailable,
+    SqlAlchemyInvestigationStore,
+)
 from packages.persistence.payment_store import (
     IdempotencyConflict,
     PaymentStoreUnavailable,
@@ -27,11 +31,13 @@ __all__ = [
     "IdempotencyConflict",
     "IncidentStoreUnavailable",
     "IngestBatch",
+    "InvestigationStoreUnavailable",
     "PaymentStoreUnavailable",
     "PendingQueueJob",
     "QueueJobNotFound",
     "SqlAlchemyEvidenceStore",
     "SqlAlchemyIncidentStore",
+    "SqlAlchemyInvestigationStore",
     "SqlAlchemyPaymentStore",
     "WorkerClaim",
     "stable_deployment_id",

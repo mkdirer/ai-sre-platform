@@ -11,24 +11,32 @@ from celery.signals import (  # type: ignore[import-untyped]
     worker_process_init,
     worker_process_shutdown,
 )
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from prometheus_client import start_http_server
 from pydantic import TypeAdapter, ValidationError
 
+from packages.agents.evidence_tools import AdditionalEvidenceTools
+from packages.agents.provider import BudgetedModelGateway, OpenAIResponsesProvider
+from packages.agents.workflow import InvestigatorWorkflow
 from packages.config import Settings
 from packages.incidents.evidence_collection import EvidenceAdapters, EvidenceCollectionService
 from packages.incidents.worker import (
+    AiInvestigationService,
     EvidenceInvestigationService,
     WorkerExecution,
     WorkerExecutionStatus,
 )
 from packages.models.evidence import SourceCollectionSummary
 from packages.models.incidents import IncidentId
+from packages.models.investigation import IncidentReport
 from packages.persistence import (
     IncidentStoreUnavailable,
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
+    SqlAlchemyInvestigationStore,
     WorkerClaim,
 )
+from packages.persistence.database import build_psycopg_connection_string
 from packages.task_queue import create_celery_app
 from packages.telemetry import TelemetryRuntime, bind_incident_id, reset_incident_id
 from packages.tools.deployments import DeploymentAdapter, DeploymentClient
@@ -151,7 +159,9 @@ def _run_task(task: Task, incident_id: str) -> dict[str, object]:
         "status": result.status.value,
         "attempt": result.attempt,
         "sources": [summary.model_dump(mode="json") for summary in result.source_summaries],
-        "ai_executed": False,
+        "report_id": result.report.id if result.report is not None else None,
+        "report_status": result.report.status.value if result.report is not None else None,
+        "ai_executed": result.report is not None,
     }
 
 
@@ -179,6 +189,7 @@ async def _execute_evidence_task(
     )
     incident_store = SqlAlchemyIncidentStore(settings, telemetry=telemetry)
     evidence_store = SqlAlchemyEvidenceStore(settings)
+    artifact_store = SqlAlchemyInvestigationStore(settings)
     prometheus_client = PrometheusClient(settings, telemetry=telemetry)
     loki_client = LokiClient(settings, telemetry=telemetry)
     tempo_client = TempoClient(settings, telemetry=telemetry)
@@ -199,11 +210,56 @@ async def _execute_evidence_task(
     ) -> tuple[SourceCollectionSummary, ...]:
         return await collector.collect(claim)
 
-    service = EvidenceInvestigationService(
-        incident_store,
-        settings,
-        operation=collect_claim,
-    )
+    if settings.investigator_enabled:
+
+        async def investigate_claim(claim: WorkerClaim) -> IncidentReport:
+            if settings.investigator_provider != "openai":
+                raise ValueError("unsupported configured investigator provider")
+            provider = OpenAIResponsesProvider(settings)
+            try:
+                usage = await artifact_store.usage_for_run(claim.run_id)
+                gateway = BudgetedModelGateway(
+                    provider=provider,
+                    store=artifact_store,
+                    settings=settings,
+                    usage=usage,
+                    telemetry=telemetry,
+                )
+                async with AsyncPostgresSaver.from_conn_string(
+                    build_psycopg_connection_string(settings)
+                ) as checkpointer:
+                    workflow = InvestigatorWorkflow(
+                        settings=settings,
+                        checkpointer=checkpointer,
+                        evidence_store=evidence_store,
+                        artifact_store=artifact_store,
+                        collector=collect_claim,
+                        model_gateway=gateway,
+                        additional_tools=AdditionalEvidenceTools(
+                            loki=LokiAdapter(loki_client),
+                            tempo=TempoAdapter(tempo_client),
+                            evidence_store=evidence_store,
+                            call_store=artifact_store,
+                            settings=settings,
+                            telemetry=telemetry,
+                        ),
+                        telemetry=telemetry,
+                    )
+                    return await workflow.run(claim)
+            finally:
+                await provider.close()
+
+        service: AiInvestigationService | EvidenceInvestigationService = AiInvestigationService(
+            incident_store,
+            settings,
+            operation=investigate_claim,
+        )
+    else:
+        service = EvidenceInvestigationService(
+            incident_store,
+            settings,
+            operation=collect_claim,
+        )
     incident_token = bind_incident_id(incident_id)
     try:
         result = await service.execute(job_id=job_id, incident_id=incident_id)
@@ -236,6 +292,7 @@ async def _execute_evidence_task(
             tempo_client.close(),
             incident_store.close(),
             evidence_store.close(),
+            artifact_store.close(),
             return_exceptions=True,
         )
         if owns_telemetry:

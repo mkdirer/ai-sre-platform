@@ -1,1 +1,1 @@
-"""AI workflow namespace; implementation is deferred to Stage 06."""
+"""Evidence-grounded LangGraph investigator components."""

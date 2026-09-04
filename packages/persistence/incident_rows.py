@@ -109,12 +109,12 @@ class InvestigationRunRow(Base):
     __tablename__ = "investigation_runs"
     __table_args__ = (
         CheckConstraint(
-            "stage IN ('no_ai_placeholder','evidence_collection')",
+            "stage IN ('no_ai_placeholder','evidence_collection','ai_investigation')",
             name="valid_stage",
         ),
         CheckConstraint(
             "status IN ('queued','running','placeholder_complete_no_ai','evidence_collected',"
-            "'retry_scheduled',"
+            "'report_generated','waiting_for_approval','insufficient_evidence','retry_scheduled',"
             "'failed','dead_lettered','skipped_terminal')",
             name="valid_status",
         ),

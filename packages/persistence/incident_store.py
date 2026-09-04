@@ -27,6 +27,7 @@ from packages.models.incidents import (
     QueueJobResponse,
     QueueJobStatus,
 )
+from packages.models.investigation import IncidentReport, ReportStatus
 from packages.persistence.database import create_database_engine
 from packages.persistence.incident_rows import (
     AlertOccurrenceRow,
@@ -97,6 +98,7 @@ class WorkerClaim:
     incident_title: str
     service: str
     affected_services: tuple[str, ...]
+    severity: IncidentSeverity
     started_at: datetime
     investigation_window_start: datetime
     investigation_window_end: datetime
@@ -322,11 +324,12 @@ class SqlAlchemyIncidentStore:
     ) -> PendingQueueJob:
         run_id = uuid5(_RUN_NAMESPACE, f"{incident_id}:{delivery_fingerprint}")
         job_id = uuid5(_JOB_NAMESPACE, str(run_id))
+        stage = "ai_investigation" if self._settings.investigator_enabled else "evidence_collection"
         session.add(
             InvestigationRunRow(
                 id=run_id,
                 incident_id=incident_id,
-                stage="evidence_collection",
+                stage=stage,
                 status=InvestigationRunStatus.QUEUED.value,
                 attempt=0,
                 created_at=now,
@@ -349,11 +352,11 @@ class SqlAlchemyIncidentStore:
         self._add_audit(
             session,
             incident_id=incident_id,
-            event_type="investigation.evidence_collection_queued",
+            event_type=f"investigation.{stage}_queued",
             actor="incident-api",
             from_status=None,
             to_status=None,
-            details={"run_id": str(run_id), "job_id": str(job_id), "stage": "evidence_collection"},
+            details={"run_id": str(run_id), "job_id": str(job_id), "stage": stage},
         )
         return PendingQueueJob(id=job_id, incident_id=incident_id)
 
@@ -528,7 +531,11 @@ class SqlAlchemyIncidentStore:
                 job.lease_expires_at = lease_expires_at
                 job.updated_at = now
                 run.status = InvestigationRunStatus.RUNNING.value
-                run.stage = "evidence_collection"
+                run.stage = (
+                    "ai_investigation"
+                    if self._settings.investigator_enabled
+                    else "evidence_collection"
+                )
                 run.attempt = job.attempts
                 run.error_type = None
                 run.error_message = None
@@ -603,6 +610,100 @@ class SqlAlchemyIncidentStore:
             raise
         except SQLAlchemyError as error:
             raise IncidentStoreUnavailable("could not complete evidence job") from error
+
+    async def complete_ai_job(self, job_id: UUID, *, report: IncidentReport) -> None:
+        """Atomically publish a validated report into canonical run and incident state."""
+
+        now = datetime.now(UTC)
+        try:
+            async with self._sessions() as session, session.begin():
+                job = (
+                    await session.execute(
+                        select(QueueJobRow).where(QueueJobRow.id == job_id).with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if job is None:
+                    raise QueueJobNotFound(str(job_id))
+                if QueueJobStatus(job.status) in _TERMINAL_JOB_STATUSES:
+                    return
+                if report.incident_id != job.incident_id:
+                    raise IncidentStoreUnavailable("report incident ownership mismatch")
+                run = (
+                    await session.execute(
+                        select(InvestigationRunRow)
+                        .where(InvestigationRunRow.id == job.investigation_run_id)
+                        .with_for_update()
+                    )
+                ).scalar_one()
+                incident = (
+                    await session.execute(
+                        select(IncidentRow)
+                        .where(IncidentRow.id == job.incident_id)
+                        .with_for_update()
+                    )
+                ).scalar_one()
+                job.status = QueueJobStatus.COMPLETED.value
+                job.finished_at = now
+                job.lease_expires_at = None
+                job.next_retry_at = None
+                job.updated_at = now
+                run.stage = "ai_investigation"
+                run.status = {
+                    ReportStatus.WAITING_FOR_APPROVAL: (
+                        InvestigationRunStatus.WAITING_FOR_APPROVAL
+                    ),
+                    ReportStatus.INSUFFICIENT_EVIDENCE: (
+                        InvestigationRunStatus.INSUFFICIENT_EVIDENCE
+                    ),
+                    ReportStatus.COMPLETE: InvestigationRunStatus.REPORT_GENERATED,
+                }[report.status].value
+                run.completed_at = now
+                run.updated_at = now
+                incident.root_cause = (
+                    report.root_cause.value if report.root_cause is not None else None
+                )
+                incident.confidence = report.confidence
+                current_status = IncidentStatus(incident.status)
+                target = {
+                    ReportStatus.WAITING_FOR_APPROVAL: IncidentStatus.WAITING_FOR_APPROVAL,
+                    ReportStatus.INSUFFICIENT_EVIDENCE: IncidentStatus.INSUFFICIENT_EVIDENCE,
+                }.get(report.status)
+                if target is not None and self._transitions.can_transition(current_status, target):
+                    self._transition(
+                        session,
+                        incident,
+                        target,
+                        actor="investigator-worker",
+                        event_type=f"investigation.{report.status.value}",
+                        now=now,
+                    )
+                else:
+                    incident.version += 1
+                    incident.updated_at = now
+                self._add_audit(
+                    session,
+                    incident_id=job.incident_id,
+                    event_type="investigation.report_persisted",
+                    actor="investigator-worker",
+                    from_status=None,
+                    to_status=None,
+                    details={
+                        "job_id": str(job.id),
+                        "run_id": str(run.id),
+                        "report_id": report.id,
+                        "report_status": report.status.value,
+                        "root_cause": (
+                            report.root_cause.value if report.root_cause is not None else None
+                        ),
+                        "confidence": report.confidence,
+                        "recommendation_count": len(report.recommendations),
+                        "remediation_executed": False,
+                    },
+                )
+        except (QueueJobNotFound, IncidentStoreUnavailable):
+            raise
+        except SQLAlchemyError as error:
+            raise IncidentStoreUnavailable("could not complete AI investigation job") from error
 
     async def record_job_failure(
         self,
@@ -946,6 +1047,7 @@ class SqlAlchemyIncidentStore:
             incident_title=incident.title,
             service=incident.service,
             affected_services=tuple(incident.affected_services),
+            severity=IncidentSeverity(incident.severity),
             started_at=incident.started_at,
             investigation_window_start=incident.investigation_window_start,
             investigation_window_end=incident.investigation_window_end,

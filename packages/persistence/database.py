@@ -35,6 +35,20 @@ def build_database_url(settings: Settings) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def build_psycopg_connection_string(settings: Settings) -> str:
+    """Build the private psycopg URL required by the official LangGraph checkpointer."""
+
+    url = URL.create(
+        drivername="postgresql",
+        username=settings.postgres_user,
+        password=settings.postgres_password.get_secret_value(),
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_db,
+    )
+    return url.render_as_string(hide_password=False)
+
+
 def create_database_engine(settings: Settings) -> AsyncEngine:
     """Create a lazy async engine; no connection is made during import."""
 
