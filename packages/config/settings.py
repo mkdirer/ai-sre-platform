@@ -112,6 +112,22 @@ class Settings(BaseSettings):
     investigator_output_cost_per_million_usd: Annotated[float, Field(ge=0, le=1_000)] = 0.0
     investigator_root_confidence_threshold: Annotated[float, Field(ge=0.5, le=0.95)] = 0.65
     investigator_min_competing_hypotheses: Annotated[int, Field(ge=3, le=5)] = 3
+    knowledge_provider: Annotated[
+        str,
+        StringConstraints(pattern=r"^[a-z][a-z0-9_-]{1,31}$"),
+    ] = "fake"
+    knowledge_embedding_model: Annotated[
+        str,
+        StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"),
+    ] = "text-embedding-3-small"
+    knowledge_embedding_dimensions: Annotated[int, Field(ge=8, le=4096)] = 1536
+    knowledge_chunk_tokens: Annotated[int, Field(ge=100, le=2000)] = 600
+    knowledge_chunk_overlap_tokens: Annotated[int, Field(ge=0, le=500)] = 100
+    knowledge_top_k: Annotated[int, Field(ge=1, le=20)] = 8
+    knowledge_max_top_k: Annotated[int, Field(ge=1, le=50)] = 20
+    knowledge_max_context_chars: Annotated[int, Field(ge=1_024, le=50_000)] = 6_000
+    knowledge_max_chunk_chars: Annotated[int, Field(ge=256, le=8_000)] = 2_000
+    knowledge_embedding_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 10.0
     outbound_http_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 5.0
     outbound_http_max_attempts: Annotated[int, Field(ge=1, le=3)] = 2
     outbound_http_retry_backoff_seconds: Annotated[float, Field(ge=0, le=1)] = 0.05

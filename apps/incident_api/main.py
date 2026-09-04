@@ -1,10 +1,12 @@
 """Durable Alertmanager ingestion and typed Incident API."""
 
 import asyncio
+from collections.abc import Sequence
 from typing import Annotated, Protocol
 from uuid import UUID
 
 from fastapi import Body, FastAPI, Query, Request, status
+from pydantic import ValidationError
 
 from apps.demo.common.web import (
     ApiError,
@@ -41,6 +43,7 @@ from packages.models.incidents import (
     QueueJobPage,
     QueueJobStatus,
 )
+from packages.models.knowledge import KnowledgeDocType, KnowledgePage, KnowledgeQuery
 from packages.persistence import (
     DeploymentConflict,
     EvidenceStoreUnavailable,
@@ -50,6 +53,7 @@ from packages.persistence import (
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
 )
+from packages.rag.embeddings import EmbeddingDimensionMismatch
 from packages.task_queue import CeleryIncidentPublisher, JobPublishError, RedisDependency
 from packages.telemetry import bind_incident_id, reset_incident_id
 
@@ -173,6 +177,31 @@ class QueueReadiness(Protocol):
     async def close(self) -> None: ...
 
 
+class KnowledgeSearchStore(Protocol):
+    """Allowlisted historical-context retrieval exposed by the HTTP API."""
+
+    async def search(
+        self,
+        query_embedding: list[float],
+        *,
+        doc_types: list[KnowledgeDocType] | None = None,
+        top_k: int,
+    ) -> KnowledgePage: ...
+
+    async def close(self) -> None: ...
+
+
+class KnowledgeEmbedder(Protocol):
+    """Query embedding boundary for read-only knowledge search."""
+
+    @property
+    def dimensions(self) -> int: ...
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]: ...
+
+    async def close(self) -> None: ...
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -180,6 +209,8 @@ def create_app(
     publisher: IncidentJobPublisher | None = None,
     queue_dependency: QueueReadiness | None = None,
     evidence_store: EvidenceApiStore | None = None,
+    knowledge_store: KnowledgeSearchStore | None = None,
+    knowledge_embedder: KnowledgeEmbedder | None = None,
 ) -> FastAPI:
     """Build the Incident API with injectable persistence and queue boundaries."""
 
@@ -199,9 +230,15 @@ def create_app(
     resolved_evidence_store: EvidenceApiStore = evidence_store or SqlAlchemyEvidenceStore(
         resolved_settings
     )
+    resolved_knowledge_store = knowledge_store
+    resolved_knowledge_embedder = knowledge_embedder
     register_shutdown_callback(app, resolved_store.close)
     register_shutdown_callback(app, resolved_queue.close)
     register_shutdown_callback(app, resolved_evidence_store.close)
+    if resolved_knowledge_store is not None:
+        register_shutdown_callback(app, resolved_knowledge_store.close)
+    if resolved_knowledge_embedder is not None:
+        register_shutdown_callback(app, resolved_knowledge_embedder.close)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:
@@ -459,6 +496,45 @@ def create_app(
         except IncidentStoreUnavailable as error:
             raise ApiError(
                 503, "persistence_unavailable", "incident persistence is unavailable"
+            ) from error
+
+    @app.get(
+        "/api/v1/knowledge/search",
+        response_model=KnowledgePage,
+        responses={422: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def search_knowledge(
+        q: Annotated[str, Query(min_length=1, max_length=2000)],
+        doc_type: Annotated[list[KnowledgeDocType] | None, Query()] = None,
+        top_k: Annotated[int, Query(ge=1, le=50)] = 8,
+    ) -> KnowledgePage:
+        """Search versioned historical context separately from current telemetry."""
+
+        if resolved_knowledge_store is None or resolved_knowledge_embedder is None:
+            raise ApiError(503, "knowledge_unavailable", "knowledge search is not configured")
+        if not q.strip():
+            raise ApiError(422, "invalid_knowledge_query", "query must not be blank")
+        try:
+            validated = KnowledgeQuery(query=q.strip(), doc_types=doc_type, top_k=top_k)
+        except ValidationError as error:
+            raise ApiError(422, "invalid_knowledge_query", str(error)) from error
+        bounded = max(1, min(validated.top_k, resolved_settings.knowledge_max_top_k))
+        try:
+            vectors = await resolved_knowledge_embedder.embed([validated.query])
+            return await resolved_knowledge_store.search(
+                vectors[0], doc_types=validated.doc_types, top_k=bounded
+            )
+        except EmbeddingDimensionMismatch as error:
+            raise ApiError(
+                503, "knowledge_unavailable", "knowledge embedding misconfigured"
+            ) from error
+        except (ValidationError, ValueError) as error:
+            raise ApiError(
+                503, "knowledge_unavailable", "knowledge search is unavailable"
+            ) from error
+        except Exception as error:
+            raise ApiError(
+                503, "knowledge_unavailable", "knowledge search is unavailable"
             ) from error
 
     return app

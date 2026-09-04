@@ -167,8 +167,14 @@ def build_report(
     evidence: Sequence[EvidenceItem],
     timeline: Sequence[TimelineEvent],
     generated_at: datetime,
+    knowledge_hits: Sequence[object] | None = None,
+    knowledge_references: Sequence[str] | None = None,
 ) -> IncidentReport:
-    """Assemble a report whose factual fields are all code-owned or evidence-derived."""
+    """Assemble a report whose factual fields are all code-owned or evidence-derived.
+
+    Historical knowledge is supporting context only: it is retained as citations
+    but can never substitute for current telemetry evidence when selecting RCA.
+    """
 
     known = _evidence_map(evidence, incident_id)
     eligible_by_id = {item.id: item for item in eligible}
@@ -196,6 +202,20 @@ def build_report(
     for recommendation in recommendations:
         referenced.update(recommendation.rationale_evidence_ids)
     _require_evidence_ids(referenced, known)
+
+    known_knowledge_ids = _knowledge_id_set(knowledge_hits)
+    requested_knowledge = list(knowledge_references or [])
+    if knowledge_hits is not None:
+        for citation in requested_knowledge:
+            if not citation.startswith("KNW-"):
+                raise GroundingValidationError("knowledge citations must use KNW- chunk IDs")
+        unknown_knowledge = sorted(set(requested_knowledge) - known_knowledge_ids)
+        if unknown_knowledge:
+            raise GroundingValidationError(
+                f"unknown knowledge citations: {','.join(unknown_knowledge)}"
+            )
+    elif requested_knowledge:
+        raise GroundingValidationError("knowledge citations require retrieved context")
 
     limitations = _data_gaps(evidence)
     if selected is None:
@@ -232,12 +252,26 @@ def build_report(
         timeline=list(timeline[:100]),
         hypotheses=list(hypotheses),
         evidence_references=sorted(referenced),
+        knowledge_references=sorted(set(requested_knowledge)),
         recommendations=list(recommendations),
         related_incident_ids=[],
         limitations=limitations,
         status=status,
         generated_at=generated_at.astimezone(UTC),
     )
+
+
+def _knowledge_id_set(knowledge_hits: Sequence[object] | None) -> set[str]:
+    """Extract KNW- chunk IDs from retrieved hits without trusting model output."""
+
+    if not knowledge_hits:
+        return set()
+    ids: set[str] = set()
+    for hit in knowledge_hits:
+        chunk_id = getattr(hit, "chunk_id", None)
+        if isinstance(chunk_id, str) and chunk_id.startswith("KNW-"):
+            ids.add(chunk_id)
+    return ids
 
 
 def _evidence_map(evidence: Sequence[EvidenceItem], incident_id: str) -> dict[str, EvidenceItem]:

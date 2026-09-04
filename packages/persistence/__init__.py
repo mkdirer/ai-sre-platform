@@ -19,6 +19,10 @@ from packages.persistence.investigation_store import (
     InvestigationStoreUnavailable,
     SqlAlchemyInvestigationStore,
 )
+from packages.persistence.knowledge_store import (
+    KnowledgeStoreUnavailable,
+    SqlAlchemyKnowledgeStore,
+)
 from packages.persistence.payment_store import (
     IdempotencyConflict,
     PaymentStoreUnavailable,
@@ -32,12 +36,14 @@ __all__ = [
     "IncidentStoreUnavailable",
     "IngestBatch",
     "InvestigationStoreUnavailable",
+    "KnowledgeStoreUnavailable",
     "PaymentStoreUnavailable",
     "PendingQueueJob",
     "QueueJobNotFound",
     "SqlAlchemyEvidenceStore",
     "SqlAlchemyIncidentStore",
     "SqlAlchemyInvestigationStore",
+    "SqlAlchemyKnowledgeStore",
     "SqlAlchemyPaymentStore",
     "WorkerClaim",
     "stable_deployment_id",

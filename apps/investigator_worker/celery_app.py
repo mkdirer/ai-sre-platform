@@ -34,9 +34,12 @@ from packages.persistence import (
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
     SqlAlchemyInvestigationStore,
+    SqlAlchemyKnowledgeStore,
     WorkerClaim,
 )
 from packages.persistence.database import build_psycopg_connection_string
+from packages.rag.embeddings import build_embedding_provider
+from packages.rag.service import KnowledgeService
 from packages.task_queue import create_celery_app
 from packages.telemetry import TelemetryRuntime, bind_incident_id, reset_incident_id
 from packages.tools.deployments import DeploymentAdapter, DeploymentClient
@@ -190,6 +193,7 @@ async def _execute_evidence_task(
     incident_store = SqlAlchemyIncidentStore(settings, telemetry=telemetry)
     evidence_store = SqlAlchemyEvidenceStore(settings)
     artifact_store = SqlAlchemyInvestigationStore(settings)
+    knowledge_store = SqlAlchemyKnowledgeStore(settings)
     prometheus_client = PrometheusClient(settings, telemetry=telemetry)
     loki_client = LokiClient(settings, telemetry=telemetry)
     tempo_client = TempoClient(settings, telemetry=telemetry)
@@ -225,6 +229,28 @@ async def _execute_evidence_task(
                     usage=usage,
                     telemetry=telemetry,
                 )
+                try:
+                    knowledge_provider = build_embedding_provider(settings)
+                except Exception as knowledge_error:
+                    telemetry.logger.warning(
+                        "knowledge.retriever.unavailable",
+                        extra={
+                            "structured": {
+                                "error.type": type(knowledge_error).__name__,
+                                "error.message": str(knowledge_error)[:256],
+                            }
+                        },
+                    )
+                    knowledge_provider = None
+                knowledge_service = (
+                    KnowledgeService(
+                        settings=settings,
+                        store=knowledge_store,
+                        provider=knowledge_provider,
+                    )
+                    if knowledge_provider is not None
+                    else None
+                )
                 async with AsyncPostgresSaver.from_conn_string(
                     build_psycopg_connection_string(settings)
                 ) as checkpointer:
@@ -243,9 +269,14 @@ async def _execute_evidence_task(
                             settings=settings,
                             telemetry=telemetry,
                         ),
+                        knowledge_retriever=knowledge_service,
                         telemetry=telemetry,
                     )
-                    return await workflow.run(claim)
+                    try:
+                        return await workflow.run(claim)
+                    finally:
+                        if knowledge_provider is not None:
+                            await knowledge_provider.close()
             finally:
                 await provider.close()
 
@@ -293,6 +324,7 @@ async def _execute_evidence_task(
             incident_store.close(),
             evidence_store.close(),
             artifact_store.close(),
+            knowledge_store.close(),
             return_exceptions=True,
         )
         if owns_telemetry:

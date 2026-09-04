@@ -181,6 +181,9 @@ class Recommendation(BaseModel):
     status: Annotated[str, StringConstraints(pattern=r"^(proposed|waiting_for_approval)$")]
 
 
+KnowledgeChunkId = Annotated[str, StringConstraints(pattern=r"^KNW-[A-F0-9]{24}$")]
+
+
 class IncidentReport(BaseModel):
     """Evidence-grounded report assembled and validated by deterministic code."""
 
@@ -198,6 +201,12 @@ class IncidentReport(BaseModel):
     timeline: Annotated[list[TimelineEvent], Field(max_length=100)]
     hypotheses: Annotated[list[Hypothesis], Field(max_length=5)]
     evidence_references: Annotated[list[EvidenceId], Field(max_length=100)]
+    # Retrieved historical-context chunk IDs supplied alongside the report. These
+    # record which knowledge was retrieved, not model-selected proof: causal
+    # claims must still be corroborated by current telemetry evidence IDs.
+    knowledge_references: Annotated[list[KnowledgeChunkId], Field(max_length=20)] = Field(
+        default_factory=list
+    )
     recommendations: Annotated[list[Recommendation], Field(max_length=3)]
     related_incident_ids: Annotated[list[IncidentId], Field(max_length=20)] = Field(
         default_factory=list

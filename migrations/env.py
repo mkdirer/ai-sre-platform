@@ -25,6 +25,10 @@ from packages.persistence.investigation_rows import (  # noqa: F401
     InvestigatorCallRow,
     RecommendationRow,
 )
+from packages.persistence.knowledge_rows import (  # noqa: F401
+    KnowledgeChunkRow,
+    KnowledgeDocumentRow,
+)
 from packages.persistence.payment_store import PaymentRow  # noqa: F401
 
 config = context.config

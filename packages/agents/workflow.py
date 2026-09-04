@@ -20,6 +20,7 @@ from packages.agents.evidence_tools import (
 from packages.agents.prompts import (
     BASE_INSTRUCTIONS,
     GENERATE_HYPOTHESES_INSTRUCTIONS,
+    KNOWLEDGE_CONTEXT_INSTRUCTIONS,
     SYNTHESIZE_REPORT_INSTRUCTIONS,
     VERIFY_HYPOTHESIS_INSTRUCTIONS,
 )
@@ -50,7 +51,9 @@ from packages.models.investigation import (
     ReportSynthesis,
     RunUsage,
 )
+from packages.models.knowledge import KnowledgeDocType, KnowledgeHit
 from packages.persistence import WorkerClaim
+from packages.rag.service import format_knowledge_context
 from packages.telemetry import TelemetryRuntime, redact_value
 
 
@@ -69,6 +72,7 @@ class InvestigatorState(TypedDict, total=False):
     initial_collection_complete: bool
     evidence: list[dict[str, object]]
     timeline: list[dict[str, object]]
+    knowledge: list[dict[str, object]]
     candidates: list[dict[str, object]]
     hypotheses: list[dict[str, object]]
     eligible_hypothesis_ids: list[str]
@@ -77,6 +81,18 @@ class InvestigatorState(TypedDict, total=False):
     iteration: int
     usage: dict[str, object]
     report: dict[str, object]
+
+
+class KnowledgeRetriever(Protocol):
+    """Allowlisted historical-context retrieval used after telemetry correlation."""
+
+    async def retrieve(
+        self,
+        query: str,
+        *,
+        doc_types: Sequence[KnowledgeDocType] | None = None,
+        top_k: int | None = None,
+    ) -> Sequence[KnowledgeHit] | Any: ...
 
 
 class EvidenceRepository(Protocol):
@@ -124,6 +140,7 @@ class InvestigatorWorkflow:
         collector: EvidenceCollector,
         model_gateway: BudgetedModelGateway,
         additional_tools: AdditionalEvidenceTools | None = None,
+        knowledge_retriever: KnowledgeRetriever | None = None,
         telemetry: TelemetryRuntime | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -134,6 +151,7 @@ class InvestigatorWorkflow:
         self._collector = collector
         self._gateway = model_gateway
         self._additional_tools = additional_tools
+        self._knowledge_retriever = knowledge_retriever
         self._telemetry = telemetry
         self._clock = clock or (lambda: datetime.now(UTC))
         self._claim: WorkerClaim | None = None
@@ -141,6 +159,7 @@ class InvestigatorWorkflow:
         builder.add_node("scope_plan", self._scope_plan)
         builder.add_node("collect_or_load_evidence", self._collect_or_load_evidence)
         builder.add_node("correlate_timeline", self._correlate_timeline)
+        builder.add_node("retrieve_knowledge", self._retrieve_knowledge)
         builder.add_node("generate_hypotheses", self._generate_hypotheses)
         builder.add_node("verify_hypotheses", self._verify_hypotheses)
         builder.add_node("collect_additional_evidence", self._collect_additional_evidence)
@@ -149,7 +168,8 @@ class InvestigatorWorkflow:
         builder.add_edge(START, "scope_plan")
         builder.add_edge("scope_plan", "collect_or_load_evidence")
         builder.add_edge("collect_or_load_evidence", "correlate_timeline")
-        builder.add_edge("correlate_timeline", "generate_hypotheses")
+        builder.add_edge("correlate_timeline", "retrieve_knowledge")
+        builder.add_edge("retrieve_knowledge", "generate_hypotheses")
         builder.add_edge("generate_hypotheses", "verify_hypotheses")
         builder.add_conditional_edges(
             "verify_hypotheses",
@@ -255,18 +275,60 @@ class InvestigatorWorkflow:
         page = correlate_timeline(evidence, limit=100, offset=0)
         return {"timeline": [item.model_dump(mode="json") for item in page.items]}
 
+    async def _retrieve_knowledge(self, state: InvestigatorState) -> InvestigatorState:
+        """Retrieve supporting historical context after telemetry correlation."""
+
+        if self._knowledge_retriever is None:
+            return {"knowledge": []}
+        query = _knowledge_query(state)
+        try:
+            result = await self._knowledge_retriever.retrieve(
+                query,
+                doc_types=None,
+                top_k=self._settings.knowledge_top_k,
+            )
+        except Exception as retrieval_error:
+            if self._telemetry is not None:
+                self._telemetry.logger.warning(
+                    "knowledge.retrieval.failed",
+                    extra={
+                        "structured": {
+                            "incident_id": state.get("incident_id", ""),
+                            "error.type": type(retrieval_error).__name__,
+                        }
+                    },
+                )
+            return {"knowledge": []}
+        hits: Sequence[KnowledgeHit]
+        if hasattr(result, "items"):
+            items = result.items
+            hits = tuple(items) if isinstance(items, list | tuple) else ()
+        elif isinstance(result, list | tuple):
+            hits = tuple(result)
+        else:
+            return {"knowledge": []}
+        bounded = list(hits)[: self._settings.knowledge_max_top_k]
+        return {"knowledge": [hit.model_dump(mode="json") for hit in bounded]}
+
     async def _generate_hypotheses(self, state: InvestigatorState) -> InvestigatorState:
         iteration = state.get("iteration", 0) + 1
+        knowledge = _state_knowledge(state)
         output = await self._gateway.call(
             operation=ModelOperation.GENERATE_HYPOTHESES,
             response_model=HypothesisCandidates,
-            instructions=BASE_INSTRUCTIONS + GENERATE_HYPOTHESES_INSTRUCTIONS,
+            instructions=BASE_INSTRUCTIONS
+            + GENERATE_HYPOTHESES_INSTRUCTIONS
+            + KNOWLEDGE_CONTEXT_INSTRUCTIONS,
             payload={
                 "incident": _incident_context(state),
                 "evidence": _bounded_evidence_context(
                     _state_evidence(state), self._settings.investigator_max_context_chars // 2
                 ),
                 "timeline": _bounded_timeline_context(state.get("timeline", [])),
+                "historical_context": format_knowledge_context(
+                    knowledge, max_chars=self._settings.knowledge_max_context_chars
+                ),
+                "historical_citations": [hit.chunk_id for hit in knowledge],
                 "iteration": iteration,
             },
             run_id=state["run_id"],
@@ -289,6 +351,7 @@ class InvestigatorWorkflow:
 
     async def _verify_hypotheses(self, state: InvestigatorState) -> InvestigatorState:
         evidence = _state_evidence(state)
+        knowledge = _state_knowledge(state)
         candidates = [HypothesisCandidate.model_validate(item) for item in state["candidates"]]
         verified: list[Hypothesis] = []
         requests: dict[str, AdditionalEvidenceRequest] = {}
@@ -297,12 +360,17 @@ class InvestigatorWorkflow:
             output = await self._gateway.call(
                 operation=ModelOperation.VERIFY_HYPOTHESIS,
                 response_model=HypothesisVerification,
-                instructions=BASE_INSTRUCTIONS + VERIFY_HYPOTHESIS_INSTRUCTIONS,
+                instructions=BASE_INSTRUCTIONS
+                + VERIFY_HYPOTHESIS_INSTRUCTIONS
+                + KNOWLEDGE_CONTEXT_INSTRUCTIONS,
                 payload={
                     "incident": _incident_context(state),
                     "candidate": candidate.model_dump(mode="json"),
                     "evidence": _bounded_evidence_context(
                         evidence, self._settings.investigator_max_context_chars
+                    ),
+                    "historical_context": format_knowledge_context(
+                        knowledge, max_chars=self._settings.knowledge_max_context_chars
                     ),
                 },
                 run_id=state["run_id"],
@@ -375,15 +443,22 @@ class InvestigatorWorkflow:
         hypotheses = _state_hypotheses(state)
         eligible_ids = set(state.get("eligible_hypothesis_ids", []))
         eligible = [item for item in hypotheses if item.id in eligible_ids]
+        knowledge = _state_knowledge(state)
         synthesis = await self._gateway.call(
             operation=ModelOperation.SYNTHESIZE_REPORT,
             response_model=ReportSynthesis,
-            instructions=BASE_INSTRUCTIONS + SYNTHESIZE_REPORT_INSTRUCTIONS,
+            instructions=BASE_INSTRUCTIONS
+            + SYNTHESIZE_REPORT_INSTRUCTIONS
+            + KNOWLEDGE_CONTEXT_INSTRUCTIONS,
             payload={
                 "incident": _incident_context(state),
                 "hypotheses": [item.model_dump(mode="json") for item in hypotheses],
                 "eligible_hypothesis_ids": sorted(eligible_ids),
                 "evidence_ids": [item.id for item in _state_evidence(state)],
+                "historical_context": format_knowledge_context(
+                    knowledge, max_chars=self._settings.knowledge_max_context_chars
+                ),
+                "historical_citations": [hit.chunk_id for hit in knowledge],
             },
             run_id=state["run_id"],
             incident_id=state["incident_id"],
@@ -401,6 +476,8 @@ class InvestigatorWorkflow:
             evidence=_state_evidence(state),
             timeline=_state_timeline(state).items,
             generated_at=self._clock(),
+            knowledge_hits=knowledge,
+            knowledge_references=[hit.chunk_id for hit in knowledge],
         )
         await self._artifact_store.save_report(UUID(state["run_id"]), report)
         return {
@@ -500,6 +577,24 @@ def _state_evidence(state: InvestigatorState) -> tuple[EvidenceItem, ...]:
     return tuple(EvidenceItem.model_validate(item) for item in state.get("evidence", []))
 
 
+def _state_knowledge(state: InvestigatorState) -> tuple[KnowledgeHit, ...]:
+    return tuple(KnowledgeHit.model_validate(item) for item in state.get("knowledge", []))
+
+
+def _knowledge_query(state: InvestigatorState) -> str:
+    """Build a deterministic retrieval query from incident identity and telemetry."""
+
+    services = " ".join(sorted(set(state.get("affected_services", []))))
+    title = str(state.get("title", "incident"))
+    severity = str(state.get("severity", ""))
+    timeline = state.get("timeline", [])
+    summaries = " ".join(
+        str(item.get("summary", "")) for item in timeline[-5:] if isinstance(item, dict)
+    )
+    query = f"{title} {services} {severity} {summaries}".strip()
+    return " ".join(query.split())[:2000] or "incident investigation"
+
+
 def _state_hypotheses(state: InvestigatorState) -> tuple[Hypothesis, ...]:
     return tuple(Hypothesis.model_validate(item) for item in state.get("hypotheses", []))
 
@@ -580,4 +675,4 @@ def _request_key(request: AdditionalEvidenceRequest) -> str:
     return f"{request.kind.value}:{request.service.value}:{request.anchor_evidence_id}"
 
 
-__all__ = ["InvestigatorState", "InvestigatorWorkflow"]
+__all__ = ["InvestigatorState", "InvestigatorWorkflow", "KnowledgeRetriever"]

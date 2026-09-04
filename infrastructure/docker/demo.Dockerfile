@@ -19,6 +19,7 @@ COPY pyproject.toml uv.lock README.md ./
 COPY apps ./apps
 COPY packages ./packages
 COPY migrations ./migrations
+COPY knowledge ./knowledge
 COPY alembic.ini ./
 
 RUN uv sync --locked --no-dev --no-editable --compile-bytecode

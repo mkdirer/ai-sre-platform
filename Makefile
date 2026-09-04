@@ -16,7 +16,7 @@ FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
 	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
 	scenario-slow-database scenario-incident-pipeline milestone1-smoke milestone2-smoke \
-	demo-investigation-report smoke-investigator-live \
+	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
 	compose-validate check
 
 setup: sync
@@ -92,6 +92,12 @@ demo-investigation-report:
 
 smoke-investigator-live:
 	$(UV) run python scripts/smoke_investigator_live.py
+
+ingest-knowledge:
+	$(UV) run python scripts/ingest_knowledge.py
+
+ingest-knowledge-dry-run:
+	$(UV) run python scripts/ingest_knowledge.py --dry-run
 
 compose-validate:
 	$(COMPOSE) config --quiet
