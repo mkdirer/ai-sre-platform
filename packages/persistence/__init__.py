@@ -1,5 +1,11 @@
 """Async PostgreSQL persistence for checkout and durable incidents."""
 
+from packages.persistence.approval_store import (
+    ApprovalConflict,
+    ApprovalNotFound,
+    ApprovalStoreUnavailable,
+    SqlAlchemyApprovalStore,
+)
 from packages.persistence.evidence_store import (
     DeploymentConflict,
     EvidenceStoreUnavailable,
@@ -30,6 +36,9 @@ from packages.persistence.payment_store import (
 )
 
 __all__ = [
+    "ApprovalConflict",
+    "ApprovalNotFound",
+    "ApprovalStoreUnavailable",
     "DeploymentConflict",
     "EvidenceStoreUnavailable",
     "IdempotencyConflict",
@@ -40,6 +49,7 @@ __all__ = [
     "PaymentStoreUnavailable",
     "PendingQueueJob",
     "QueueJobNotFound",
+    "SqlAlchemyApprovalStore",
     "SqlAlchemyEvidenceStore",
     "SqlAlchemyIncidentStore",
     "SqlAlchemyInvestigationStore",

@@ -45,6 +45,8 @@ node_modules
 .pnpm-store
 apps/frontend/dist
 apps/frontend/coverage
+apps/frontend/playwright-report
+apps/frontend/test-results
 
 # Runtime and local infrastructure data
 *.log

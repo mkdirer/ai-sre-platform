@@ -81,6 +81,44 @@ async def test_knowledge_ingest_retrieve_and_remove(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_knowledge_get_chunk_returns_coerced_embedding(
+    migrated_test_database_url: str,
+) -> None:
+    """get_chunk must survive pgvector's ndarray result type (regression).
+
+    Real PG reads return np.ndarray (float32), not list. _to_chunk must coerce
+    element-wise so the Stage 08 related-knowledge read does not 503.
+    """
+    engine = create_async_engine(migrated_test_database_url)
+    settings = _settings()
+    store = SqlAlchemyKnowledgeStore(settings, engine=engine)
+    provider = DeterministicFakeEmbeddingProvider(
+        dimensions=settings.knowledge_embedding_dimensions
+    )
+    try:
+        request = _request(path="knowledge/runbooks/chunk-read.md")
+        chunks = chunk_markdown(
+            request.content,
+            chunk_tokens=settings.knowledge_chunk_tokens,
+            overlap_tokens=settings.knowledge_chunk_overlap_tokens,
+        )
+        assert chunks
+        result = await store.ingest(request, chunks=chunks, embeddings=await provider.embed(chunks))
+        assert result.chunk_ids
+        for chunk_id, expected_text in zip(result.chunk_ids, chunks, strict=True):
+            chunk = await store.get_chunk(chunk_id)
+            assert chunk is not None
+            assert chunk.id == chunk_id
+            assert chunk.text == expected_text
+            assert len(chunk.embedding) == settings.knowledge_embedding_dimensions
+        assert await store.get_chunk("KNW-FFFFFFFFFFFFFFFFFFFFFFFF") is None
+    finally:
+        await store.close()
+        await engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_knowledge_version_update_and_dimension_mismatch(
     migrated_test_database_url: str,
 ) -> None:

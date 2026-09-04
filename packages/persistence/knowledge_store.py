@@ -134,6 +134,10 @@ class SqlAlchemyKnowledgeStore:
                             KnowledgeChunkRow.document_id == document_id
                         )
                     )
+                # Flush the parent document row before adding chunks: the unit
+                # of work does not reliably order the document INSERT ahead of
+                # same-flush chunk INSERTs, which violates the chunk FK.
+                await session.flush()
                 new_chunk_ids: list[ChunkId] = []
                 for index, (chunk_text, vector) in enumerate(zip(chunks, embeddings, strict=True)):
                     chunk_id = stable_chunk_id(document_id, index, chunk_text)
@@ -194,6 +198,16 @@ class SqlAlchemyKnowledgeStore:
             raise KnowledgeStoreUnavailable("knowledge lookup failed") from error
         return _to_document(row) if row is not None else None
 
+    async def get_chunk(self, chunk_id: str) -> KnowledgeChunk | None:
+        """Return one chunk by stable ID for related-knowledge display."""
+
+        try:
+            async with self._sessions() as session:
+                row = await session.get(KnowledgeChunkRow, chunk_id)
+        except SQLAlchemyError as error:
+            raise KnowledgeStoreUnavailable("knowledge chunk lookup failed") from error
+        return _to_chunk(row) if row is not None else None
+
     async def list_documents(
         self,
         *,
@@ -245,8 +259,12 @@ class SqlAlchemyKnowledgeStore:
                     select(
                         KnowledgeChunkRow,
                         KnowledgeDocumentRow.title,
+                        # Typed comparator (return_type=Float): the generic
+                        # .op("<=>") leaves the distance untyped, which
+                        # misaligns asyncpg result decoding for the entity.
                         func.coalesce(
-                            KnowledgeChunkRow.embedding.op("<=>")(query_embedding), 2.0
+                            KnowledgeChunkRow.embedding.cosine_distance(query_embedding),
+                            2.0,
                         ).label("distance"),
                     )
                     .join(
@@ -322,7 +340,10 @@ def _to_document(row: KnowledgeDocumentRow) -> KnowledgeDocument:
 
 
 def _to_chunk(row: KnowledgeChunkRow) -> KnowledgeChunk:
-    embedding = list(row.embedding) if isinstance(row.embedding, list | tuple) else []
+    # pgvector returns np.ndarray (float32) on real PG reads, while fakes and
+    # in-process rows use list/tuple. Coerce any non-null sequence element-wise.
+    raw = row.embedding
+    embedding = list(raw) if raw is not None else []
     return KnowledgeChunk(
         id=row.id,
         document_id=row.document_id,

@@ -1,0 +1,128 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  background: #f7f7f5;
+  color: #1a1a1a;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+}
+
+.app-header {
+  padding: 1rem 0;
+  border-bottom: 2px solid #1a1a1a;
+  margin-bottom: 1.5rem;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.25rem;
+  color: inherit;
+}
+
+section {
+  margin-bottom: 1.5rem;
+}
+
+.card {
+  background: #fff;
+  border: 1px solid #d8d8d4;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  border: 1px solid currentColor;
+  margin-right: 0.4rem;
+}
+
+.badge-warning { color: #8a5200; background: #fff4dd; }
+.badge-critical { color: #a12000; background: #ffe9e2; }
+.badge-info { color: #0b5fff; background: #e9f1ff; }
+.badge-neutral { color: #444; background: #eee; }
+.badge-good { color: #0a6b2d; background: #e6f6ea; }
+.badge-bad { color: #a12000; background: #ffe9e2; }
+
+.meta {
+  color: #555;
+  font-size: 0.85rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid #1a1a1a;
+  background: #1a1a1a;
+  color: #fff;
+  cursor: pointer;
+  margin-right: 0.5rem;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.secondary {
+  background: #fff;
+  color: #1a1a1a;
+}
+
+input, select {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #999;
+  border-radius: 6px;
+  margin-right: 0.5rem;
+}
+
+.alert {
+  border: 1px solid;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.alert-error { border-color: #a12000; background: #ffe9e2; }
+.alert-stale { border-color: #8a5200; background: #fff4dd; }
+.alert-empty { border-color: #999; background: #fff; }
+
+table.incidents {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+
+table.incidents th,
+table.incidents td {
+  text-align: left;
+  padding: 0.6rem;
+  border-bottom: 1px solid #e2e2de;
+}
+
+table.incidents th {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #555;
+}

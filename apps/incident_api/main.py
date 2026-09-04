@@ -13,6 +13,7 @@ from apps.demo.common.web import (
     create_service_app,
     get_telemetry,
     register_shutdown_callback,
+    require_idempotency_key,
 )
 from packages.config import Settings
 from packages.incidents import NormalizedAlert, correlate_timeline, normalize_webhook
@@ -43,15 +44,37 @@ from packages.models.incidents import (
     QueueJobPage,
     QueueJobStatus,
 )
-from packages.models.knowledge import KnowledgeDocType, KnowledgePage, KnowledgeQuery
+from packages.models.investigation import (
+    ApprovalDecision,
+    ApprovalRequest,
+    ApprovalResponse,
+    HypothesisPage,
+    IncidentReport,
+    RecommendationId,
+    RecommendationPage,
+)
+from packages.models.knowledge import (
+    ChunkId,
+    KnowledgeChunk,
+    KnowledgeDocType,
+    KnowledgePage,
+    KnowledgeQuery,
+)
 from packages.persistence import (
+    ApprovalConflict,
+    ApprovalNotFound,
+    ApprovalStoreUnavailable,
     DeploymentConflict,
     EvidenceStoreUnavailable,
     IncidentStoreUnavailable,
     IngestBatch,
+    InvestigationStoreUnavailable,
+    KnowledgeStoreUnavailable,
     PendingQueueJob,
+    SqlAlchemyApprovalStore,
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
+    SqlAlchemyInvestigationStore,
 )
 from packages.rag.embeddings import EmbeddingDimensionMismatch
 from packages.task_queue import CeleryIncidentPublisher, JobPublishError, RedisDependency
@@ -188,6 +211,8 @@ class KnowledgeSearchStore(Protocol):
         top_k: int,
     ) -> KnowledgePage: ...
 
+    async def get_chunk(self, chunk_id: str) -> KnowledgeChunk | None: ...
+
     async def close(self) -> None: ...
 
 
@@ -202,6 +227,38 @@ class KnowledgeEmbedder(Protocol):
     async def close(self) -> None: ...
 
 
+class InvestigationReads(Protocol):
+    """Persisted investigator artifacts exposed by the HTTP API."""
+
+    async def get_latest_report(self, incident_id: str) -> IncidentReport | None: ...
+
+    async def list_hypotheses(
+        self, incident_id: str, *, limit: int, offset: int
+    ) -> HypothesisPage: ...
+
+    async def list_recommendations(
+        self, incident_id: str, *, limit: int, offset: int
+    ) -> RecommendationPage: ...
+
+    async def close(self) -> None: ...
+
+
+class ApprovalDecisions(Protocol):
+    """Human approve/reject boundary owned by deterministic persistence."""
+
+    async def decide(
+        self,
+        recommendation_id: str,
+        *,
+        incident_version: int,
+        actor: str,
+        decision: ApprovalDecision,
+        idempotency_key: str,
+    ) -> ApprovalResponse: ...
+
+    async def close(self) -> None: ...
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -211,6 +268,8 @@ def create_app(
     evidence_store: EvidenceApiStore | None = None,
     knowledge_store: KnowledgeSearchStore | None = None,
     knowledge_embedder: KnowledgeEmbedder | None = None,
+    investigation_store: InvestigationReads | None = None,
+    approval_store: ApprovalDecisions | None = None,
 ) -> FastAPI:
     """Build the Incident API with injectable persistence and queue boundaries."""
 
@@ -232,6 +291,12 @@ def create_app(
     )
     resolved_knowledge_store = knowledge_store
     resolved_knowledge_embedder = knowledge_embedder
+    resolved_investigation_store: InvestigationReads | None = (
+        investigation_store or SqlAlchemyInvestigationStore(resolved_settings)
+    )
+    resolved_approval_store: ApprovalDecisions | None = approval_store or SqlAlchemyApprovalStore(
+        resolved_settings
+    )
     register_shutdown_callback(app, resolved_store.close)
     register_shutdown_callback(app, resolved_queue.close)
     register_shutdown_callback(app, resolved_evidence_store.close)
@@ -239,6 +304,10 @@ def create_app(
         register_shutdown_callback(app, resolved_knowledge_store.close)
     if resolved_knowledge_embedder is not None:
         register_shutdown_callback(app, resolved_knowledge_embedder.close)
+    if resolved_investigation_store is not None:
+        register_shutdown_callback(app, resolved_investigation_store.close)
+    if resolved_approval_store is not None:
+        register_shutdown_callback(app, resolved_approval_store.close)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:
@@ -536,6 +605,161 @@ def create_app(
             raise ApiError(
                 503, "knowledge_unavailable", "knowledge search is unavailable"
             ) from error
+
+    @app.get(
+        "/api/v1/knowledge/chunks/{chunk_id}",
+        response_model=KnowledgeChunk,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_knowledge_chunk(chunk_id: ChunkId) -> KnowledgeChunk:
+        """Return one knowledge chunk by stable ID for related-knowledge display."""
+
+        if resolved_knowledge_store is None:
+            raise ApiError(503, "knowledge_unavailable", "knowledge search is not configured")
+        try:
+            chunk = await resolved_knowledge_store.get_chunk(chunk_id)
+        except KnowledgeStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "knowledge persistence is unavailable"
+            ) from error
+        except Exception as error:
+            raise ApiError(
+                503, "knowledge_unavailable", "knowledge search is unavailable"
+            ) from error
+        if chunk is None:
+            raise ApiError(404, "knowledge_chunk_not_found", "Knowledge chunk was not found")
+        return chunk
+
+    @app.get(
+        "/api/v1/incidents/{incident_id}/report",
+        response_model=IncidentReport,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_latest_report(incident_id: IncidentId) -> IncidentReport:
+        """Return the newest investigator report, distinguishing RCA from gaps."""
+
+        await _require_incident(resolved_store, incident_id)
+        assert resolved_investigation_store is not None
+        try:
+            report = await resolved_investigation_store.get_latest_report(incident_id)
+        except InvestigationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "investigation persistence is unavailable"
+            ) from error
+        if report is None:
+            raise ApiError(404, "report_absent", "No investigation report exists yet")
+        return report
+
+    @app.get(
+        "/api/v1/incidents/{incident_id}/hypotheses",
+        response_model=HypothesisPage,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_hypotheses(
+        incident_id: IncidentId,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    ) -> HypothesisPage:
+        """Return competing hypotheses including rejected reasons."""
+
+        await _require_incident(resolved_store, incident_id)
+        assert resolved_investigation_store is not None
+        try:
+            return await resolved_investigation_store.list_hypotheses(
+                incident_id, limit=limit, offset=offset
+            )
+        except InvestigationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "investigation persistence is unavailable"
+            ) from error
+
+    @app.get(
+        "/api/v1/incidents/{incident_id}/recommendations",
+        response_model=RecommendationPage,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_recommendations(
+        incident_id: IncidentId,
+        limit: Annotated[int, Query(ge=1, le=100)] = 25,
+        offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    ) -> RecommendationPage:
+        """Return persisted recommendations with risk and approval state."""
+
+        await _require_incident(resolved_store, incident_id)
+        assert resolved_investigation_store is not None
+        try:
+            return await resolved_investigation_store.list_recommendations(
+                incident_id, limit=limit, offset=offset
+            )
+        except InvestigationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "investigation persistence is unavailable"
+            ) from error
+
+    async def _decide_recommendation(
+        recommendation_id: str,
+        decision: ApprovalDecision,
+        request: Request,
+        approval: ApprovalRequest,
+    ) -> ApprovalResponse:
+        assert resolved_approval_store is not None
+        idempotency_key = await require_idempotency_key(request)
+        try:
+            return await resolved_approval_store.decide(
+                recommendation_id,
+                incident_version=approval.incident_version,
+                actor=approval.actor,
+                decision=decision,
+                idempotency_key=idempotency_key,
+            )
+        except ApprovalNotFound as error:
+            raise ApiError(404, "recommendation_not_found", str(error)) from error
+        except ApprovalConflict as error:
+            raise ApiError(409, error.code, str(error)) from error
+        except ApprovalStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "approval persistence is unavailable"
+            ) from error
+
+    @app.post(
+        "/api/v1/recommendations/{recommendation_id}/approve",
+        response_model=ApprovalResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def approve_recommendation(
+        recommendation_id: RecommendationId, approval: ApprovalRequest, request: Request
+    ) -> ApprovalResponse:
+        """Record a human approval; the incident pause persists, nothing executes."""
+
+        return await _decide_recommendation(
+            recommendation_id, ApprovalDecision.APPROVED, request, approval
+        )
+
+    @app.post(
+        "/api/v1/recommendations/{recommendation_id}/reject",
+        response_model=ApprovalResponse,
+        responses={
+            400: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def reject_recommendation(
+        recommendation_id: RecommendationId, approval: ApprovalRequest, request: Request
+    ) -> ApprovalResponse:
+        """Record a human rejection and move the incident to rejected."""
+
+        return await _decide_recommendation(
+            recommendation_id, ApprovalDecision.REJECTED, request, approval
+        )
 
     return app
 

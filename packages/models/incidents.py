@@ -131,6 +131,8 @@ class IncidentSummary(BaseModel):
     alert_fingerprint: Fingerprint
     version: Annotated[int, Field(ge=1)]
     occurrence_count: Annotated[int, Field(ge=0)]
+    root_cause: str | None = None
+    confidence: Annotated[float | None, Field(ge=0, le=1)] = None
 
 
 class IncidentDetail(IncidentSummary):
@@ -138,8 +140,6 @@ class IncidentDetail(IncidentSummary):
 
     investigation_window_start: datetime
     investigation_window_end: datetime
-    root_cause: str | None
-    confidence: Annotated[float | None, Field(ge=0, le=1)]
 
 
 class IncidentPage(BaseModel):

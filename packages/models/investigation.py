@@ -166,7 +166,7 @@ class ReportSynthesis(BaseModel):
 
 
 class Recommendation(BaseModel):
-    """Canonical recommendation; Stage 06 persists but never executes it."""
+    """Canonical recommendation; Stage 08 adds human approve/reject, never executes it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -178,7 +178,65 @@ class Recommendation(BaseModel):
     risk: RecommendationRisk
     reversible: bool
     requires_approval: bool
-    status: Annotated[str, StringConstraints(pattern=r"^(proposed|waiting_for_approval)$")]
+    status: Annotated[
+        str, StringConstraints(pattern=r"^(proposed|waiting_for_approval|approved|rejected)$")
+    ]
+
+
+class ApprovalDecision(StrEnum):
+    """Human decision recorded against a waiting recommendation."""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ApprovalRequest(BaseModel):
+    """Human approval input; actor is a local-demo placeholder, not an identity proof."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    incident_version: Annotated[int, Field(ge=1)]
+    actor: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+
+    @field_validator("actor", mode="before")
+    @classmethod
+    def normalize_actor(cls, value: object) -> object:
+        # Strip so whitespace-only actors fail min_length instead of
+        # persisting invisible audit attribution.
+        return value.strip() if isinstance(value, str) else value
+
+
+class ApprovalRecord(BaseModel):
+    """Durable human decision with idempotency and version provenance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: Annotated[str, StringConstraints(pattern=r"^APR-[A-F0-9]{24}$")]
+    incident_id: IncidentId
+    recommendation_id: RecommendationId
+    run_id: str
+    report_id: ReportId
+    decision: ApprovalDecision
+    actor: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    incident_version: Annotated[int, Field(ge=1)]
+    idempotency_key: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def normalize_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("approval timestamp must include a timezone")
+        return value.astimezone(UTC)
+
+
+class ApprovalResponse(BaseModel):
+    """Decision outcome; replayed distinguishes idempotent replays from new decisions."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approval: ApprovalRecord
+    replayed: bool
 
 
 KnowledgeChunkId = Annotated[str, StringConstraints(pattern=r"^KNW-[A-F0-9]{24}$")]

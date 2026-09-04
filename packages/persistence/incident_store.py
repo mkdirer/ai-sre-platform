@@ -1075,6 +1075,8 @@ def _to_incident_summary(row: IncidentRow, occurrence_count: int) -> IncidentSum
         alert_fingerprint=row.alert_fingerprint,
         version=row.version,
         occurrence_count=occurrence_count,
+        root_cause=row.root_cause,
+        confidence=row.confidence,
     )
 
 
@@ -1084,8 +1086,6 @@ def _to_incident_detail(row: IncidentRow, occurrence_count: int) -> IncidentDeta
         **summary.model_dump(),
         investigation_window_start=row.investigation_window_start,
         investigation_window_end=row.investigation_window_end,
-        root_cause=row.root_cause,
-        confidence=row.confidence,
     )
 
 

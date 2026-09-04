@@ -9,6 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from packages.config import Settings
+from packages.persistence.approval_rows import ApprovalRow  # noqa: F401
 from packages.persistence.database import Base, build_database_url
 from packages.persistence.evidence_rows import DeploymentRow, EvidenceRow  # noqa: F401
 from packages.persistence.incident_rows import (  # noqa: F401
@@ -37,6 +38,31 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Tables and indexes managed outside SQLAlchemy metadata: LangGraph owns its
+# checkpoint tables via AsyncPostgresSaver, and the pgvector HNSW index is
+# created with raw SQL (pgvector has no portable Index construct here).
+# Excluding them keeps `alembic check` honest about schema we own.
+_MANAGED_ELSEWHERE_TABLES = frozenset(
+    {
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+        "checkpoint_migrations",
+    }
+)
+_MANAGED_ELSEWHERE_INDEXES = frozenset({"ix_knowledge_chunks_embedding_hnsw"})
+
+
+def _include_object(
+    obj: object, name: str, type_: str, reflected: bool, compare_to: object | None
+) -> bool:
+    """Filter externally-managed objects out of autogenerate comparisons."""
+
+    del obj, reflected, compare_to
+    if type_ == "table" and name in _MANAGED_ELSEWHERE_TABLES:
+        return False
+    return not (type_ == "index" and name in _MANAGED_ELSEWHERE_INDEXES)
+
 
 def _database_url() -> str:
     configured = config.attributes.get("database_url")
@@ -54,13 +80,19 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 def _run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        compare_type=True,
+        include_object=_include_object,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

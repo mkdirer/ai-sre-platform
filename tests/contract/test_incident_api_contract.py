@@ -95,8 +95,6 @@ def _detail() -> IncidentDetail:
         **_summary().model_dump(),
         investigation_window_start=NOW,
         investigation_window_end=NOW,
-        root_cause=None,
-        confidence=None,
     )
 
 

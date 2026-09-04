@@ -17,6 +17,7 @@ FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
 	scenario-slow-database scenario-incident-pipeline milestone1-smoke milestone2-smoke \
 	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
+	frontend-install frontend-lint frontend-typecheck frontend-test frontend-build frontend-e2e \
 	compose-validate check
 
 setup: sync
@@ -98,6 +99,24 @@ ingest-knowledge:
 
 ingest-knowledge-dry-run:
 	$(UV) run python scripts/ingest_knowledge.py --dry-run
+
+frontend-install:
+	npm --prefix apps/frontend ci
+
+frontend-lint:
+	npm --prefix apps/frontend run lint
+
+frontend-typecheck:
+	npm --prefix apps/frontend run typecheck
+
+frontend-test:
+	npm --prefix apps/frontend run test -- --run
+
+frontend-build:
+	npm --prefix apps/frontend run build
+
+frontend-e2e:
+	npm --prefix apps/frontend run test:e2e
 
 compose-validate:
 	$(COMPOSE) config --quiet

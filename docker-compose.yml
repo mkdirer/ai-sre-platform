@@ -465,6 +465,37 @@ services:
       retries: 20
       start_period: 5s
 
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/frontend.Dockerfile
+      args:
+        VITE_APPROVAL_ACTOR: ${VITE_APPROVAL_ACTOR:-local-demo-approver}
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT:-5173}:80"
+    depends_on:
+      incident-api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    # nginx master starts as root (bind :80, cache setup) then drops to the
+    # nginx user, so it keeps only the capabilities it needs instead of
+    # the blanket cap_drop: ALL used by the Python services.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:80/health/live >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
   grafana:
     image: grafana/grafana:13.2.0
     environment:

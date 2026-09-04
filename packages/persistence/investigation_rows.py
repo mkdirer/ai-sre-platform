@@ -86,7 +86,7 @@ class RecommendationRow(Base):
     __tablename__ = "recommendations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('proposed','waiting_for_approval')",
+            "status IN ('proposed','waiting_for_approval','approved','rejected')",
             name="valid_status",
         ),
     )

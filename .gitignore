@@ -38,6 +38,8 @@ node_modules/
 .pnpm-store/
 apps/frontend/dist/
 apps/frontend/coverage/
+apps/frontend/playwright-report/
+apps/frontend/test-results/
 
 # Logs and runtime data
 *.log
