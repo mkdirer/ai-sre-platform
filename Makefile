@@ -15,7 +15,7 @@ FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
 	test-integration test-eval migrate compose-up compose-down compose-logs smoke smoke-observability \
-	scenario-slow-database scenario-incident-pipeline milestone1-smoke milestone2-smoke \
+	scenario-slow-database scenario-incident-pipeline scenario-remediation milestone1-smoke milestone2-smoke \
 	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
 	eval-fake eval-extended eval-live \
 	frontend-install frontend-lint frontend-typecheck frontend-test frontend-build frontend-e2e \
@@ -82,6 +82,9 @@ smoke-observability:
 
 scenario-incident-pipeline:
 	$(UV) run python scripts/scenario_slow_database.py
+
+scenario-remediation:
+	$(UV) run python scripts/scenario_remediation.py
 
 scenario-slow-database: scenario-incident-pipeline
 

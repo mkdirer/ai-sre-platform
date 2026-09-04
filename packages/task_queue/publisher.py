@@ -27,23 +27,39 @@ class CeleryIncidentPublisher:
     async def publish(self, *, job_id: UUID, incident_id: str) -> None:
         """Publish one JSON task without embedding an alert payload."""
 
+        await self._send("incident.collect_evidence", task_id=job_id, args=[incident_id])
+
+    async def publish_remediation(
+        self, *, task_id: UUID, execution_id: str, incident_id: str
+    ) -> None:
+        """Publish one remediation task carrying only incident-owned identifiers."""
+
+        await self._send(
+            "remediation.execute_rollback",
+            task_id=task_id,
+            args=[execution_id, incident_id],
+        )
+
+    async def _send(self, task_name: str, *, task_id: UUID, args: list[str]) -> None:
+        """Publish one JSON task without embedding an alert payload."""
+
         try:
             sender = self._celery.send_task
             options = {
-                "args": [incident_id],
-                "task_id": str(job_id),
+                "args": args,
+                "task_id": str(task_id),
                 "queue": "incidents",
             }
             if inspect.iscoroutinefunction(sender):
                 await asyncio.wait_for(
-                    sender("incident.collect_evidence", **options),
+                    sender(task_name, **options),
                     timeout=self._timeout,
                 )
             else:
                 await asyncio.wait_for(
                     asyncio.to_thread(
                         sender,
-                        "incident.collect_evidence",
+                        task_name,
                         **options,
                     ),
                     timeout=self._timeout,

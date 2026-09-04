@@ -1,6 +1,7 @@
 """Celery entrypoint for retry-safe deterministic evidence collection."""
 
 import asyncio
+import re
 from threading import Thread
 from typing import NoReturn
 from uuid import UUID
@@ -31,15 +32,23 @@ from packages.models.incidents import IncidentId
 from packages.models.investigation import IncidentReport
 from packages.persistence import (
     IncidentStoreUnavailable,
+    RemediationStoreUnavailable,
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
     SqlAlchemyInvestigationStore,
     SqlAlchemyKnowledgeStore,
+    SqlAlchemyRemediationStore,
     WorkerClaim,
 )
 from packages.persistence.database import build_psycopg_connection_string
 from packages.rag.embeddings import build_embedding_provider
 from packages.rag.service import KnowledgeService
+from packages.remediation.adapter import PaymentServiceRollbackAdapter
+from packages.remediation.service import (
+    ExecutionResult,
+    PrometheusRecoveryProbe,
+    RemediationExecutionService,
+)
 from packages.task_queue import create_celery_app
 from packages.telemetry import TelemetryRuntime, bind_incident_id, reset_incident_id
 from packages.tools.deployments import DeploymentAdapter, DeploymentClient
@@ -177,6 +186,89 @@ def _retry(task: Task, result: WorkerExecution) -> NoReturn:
         countdown=delay,
         max_retries=max(0, Settings().investigation_max_attempts - 1),
     )
+
+
+@celery_app.task(  # type: ignore[misc]
+    bind=True,
+    name="remediation.execute_rollback",
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def execute_rollback(self: Task, execution_id: str, incident_id: str) -> dict[str, object]:
+    """Run one claimed remediation execution through verified recovery."""
+
+    return _run_remediation_task(self, execution_id, incident_id)
+
+
+def _run_remediation_task(task: Task, execution_id: str, incident_id: str) -> dict[str, object]:
+    try:
+        validated_incident_id = _incident_id_adapter.validate_python(incident_id)
+        if re.fullmatch(r"REM-[A-F0-9]{24}", execution_id) is None:
+            raise ValueError("invalid remediation execution identity")
+    except (TypeError, ValueError, ValidationError) as error:
+        raise ValueError("invalid remediation task identity") from error
+
+    settings = Settings()
+    try:
+        result = asyncio.run(
+            _execute_remediation_task(
+                settings=settings,
+                execution_id=execution_id,
+                incident_id=validated_incident_id,
+            )
+        )
+    except RemediationStoreUnavailable as error:
+        retry_count = int(task.request.retries)
+        if retry_count < settings.investigation_max_attempts - 1:
+            raise task.retry(
+                exc=RuntimeError("remediation persistence unavailable"),
+                countdown=settings.investigation_job_lease_seconds,
+                max_retries=settings.investigation_max_attempts - 1,
+            ) from error
+        raise
+    return {
+        "execution_id": result.execution.id,
+        "incident_id": result.execution.incident_id,
+        "outcome": result.outcome.value,
+        "status": result.execution.status.value,
+        "detail": result.detail,
+    }
+
+
+async def _execute_remediation_task(
+    *,
+    settings: Settings,
+    execution_id: str,
+    incident_id: str,
+) -> ExecutionResult:
+    owns_telemetry = _worker_telemetry is None
+    telemetry = _worker_telemetry or TelemetryRuntime.create(
+        service_name="investigator-worker",
+        settings=settings,
+    )
+    remediation_store = SqlAlchemyRemediationStore(settings)
+    evidence_store = SqlAlchemyEvidenceStore(settings)
+    prometheus_client = PrometheusClient(settings, telemetry=telemetry)
+    service = RemediationExecutionService(
+        store=remediation_store,
+        contexts=remediation_store,
+        deployments=evidence_store,
+        adapter=PaymentServiceRollbackAdapter(settings),
+        settings=settings,
+        latency_probe=PrometheusRecoveryProbe(PrometheusAdapter(prometheus_client)).current_p95,
+    )
+    try:
+        bind_token = bind_incident_id(incident_id)
+        try:
+            return await service.execute(execution_id=execution_id, actor="remediation-worker")
+        finally:
+            reset_incident_id(bind_token)
+    finally:
+        await remediation_store.close()
+        await evidence_store.close()
+        await prometheus_client.close()
+        if owns_telemetry:
+            telemetry.shutdown()
 
 
 async def _execute_evidence_task(

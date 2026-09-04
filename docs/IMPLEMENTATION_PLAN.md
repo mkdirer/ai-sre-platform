@@ -198,6 +198,16 @@ Acceptance:
 
 Goal: approved local rollback followed by deterministic verification.
 
+Status: implemented in repository Stage 10. A closed action registry allows
+only `rollback_payment_deployment` on `payment-service` (typed parameters
+validated separately from execution); the Incident API claims one execution
+row per approved recommendation (version-checked, replay-safe, concurrency
+serialized) and enqueues a worker task; the allowlisted adapter disables the
+listed faults with read-back confirmation (unknown outcomes never assumed);
+deterministic p95 thresholds over a bounded window verify recovery, with
+outages and ambiguity recorded as gaps that never resolve; a manual stop
+path ends execution unresolved. The LangGraph is not re-entered.
+
 Acceptance:
 
 - allowlisted action schema;

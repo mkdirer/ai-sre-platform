@@ -34,6 +34,12 @@ from packages.persistence.payment_store import (
     PaymentStoreUnavailable,
     SqlAlchemyPaymentStore,
 )
+from packages.persistence.remediation_store import (
+    RemediationConflict,
+    RemediationNotFound,
+    RemediationStoreUnavailable,
+    SqlAlchemyRemediationStore,
+)
 
 __all__ = [
     "ApprovalConflict",
@@ -49,12 +55,16 @@ __all__ = [
     "PaymentStoreUnavailable",
     "PendingQueueJob",
     "QueueJobNotFound",
+    "RemediationConflict",
+    "RemediationNotFound",
+    "RemediationStoreUnavailable",
     "SqlAlchemyApprovalStore",
     "SqlAlchemyEvidenceStore",
     "SqlAlchemyIncidentStore",
     "SqlAlchemyInvestigationStore",
     "SqlAlchemyKnowledgeStore",
     "SqlAlchemyPaymentStore",
+    "SqlAlchemyRemediationStore",
     "WorkerClaim",
     "stable_deployment_id",
     "stable_evidence_id",

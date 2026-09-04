@@ -92,8 +92,16 @@ Implemented now:
   actionable 409s; approval records the decision and resumes state without executing
   remediation).
 
-Explicitly deferred are remediation,
-Kubernetes, and cloud resources. The Stage 03 receiver remains available only in the `test-tools`
+Approved remediation (Stage 10) executes one allowlisted action after explicit
+approval: `POST /api/v1/recommendations/{id}/execute` claims a
+`rollback_payment_deployment` execution (version-checked, replay-safe,
+concurrency-serialized) and enqueues the worker; the adapter disables the
+listed payment faults with read-back confirmation; deterministic p95
+thresholds over a bounded window verify recovery (`GET
+/api/v1/remediations/{id}`); `POST .../stop` ends execution unresolved.
+Recovery resolves the incident; ambiguity, failure, or stop never does.
+
+Explicitly deferred are Kubernetes and cloud resources. The Stage 03 receiver remains available only in the `test-tools`
 Compose profile and its contract test; Alertmanager no longer targets it.
 
 ## Reproducible evals (Stage 09)
@@ -499,6 +507,7 @@ Screenshots are not committed; capture them deterministically from a local run:
 | `make compose-logs` | Print uncolored service/migration/PostgreSQL logs. |
 | `make smoke-observability` | Prove metric, log, and trace correlation through backend APIs. |
 | `make scenario-incident-pipeline` | Prove fault→alert→durable incident→worker→recovery. |
+| `make scenario-remediation` | Prove approval→rollback→telemetry recovery→resolved (~60s). |
 | `make eval-fake` | Run the 7-scenario offline eval suite and write `evals/results/`. |
 | `make eval-extended` | Run the 12-scenario extended offline eval suite. |
 | `make test-eval` | Run eval schema/grader/fault unit tests plus the fake suite. |
@@ -583,6 +592,9 @@ investigator boundary is recorded in
 [ADR 0007](docs/adr/0007-evidence-grounded-investigator-boundary.md). Knowledge retrieval is
 recorded in [ADR 0008](docs/adr/0008-knowledge-rag-boundary.md) and the frontend/approval
 boundary in [ADR 0009](docs/adr/0009-frontend-approval-boundary.md). Eval scenarios and
-grading are [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md). The next planned
-milestone is **implementation-plan Stage 9 / safe remediation and recovery**; Kubernetes,
-Terraform, and cloud deployment are deliberately not started here.
+grading are [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md), and the
+remediation execution boundary is
+[ADR 0011](docs/adr/0011-remediation-execution-boundary.md). The next planned
+milestone is **implementation-plan Stage 10 / Kubernetes, Helm, Terraform,
+CI/CD**; cloud deployment and production auto-remediation are deliberately
+not started here.

@@ -39,6 +39,7 @@ def create_celery_app(settings: Settings, *, include_worker: bool = False) -> Ce
         task_routes={
             "incident.collect_evidence": {"queue": "incidents"},
             "incident.process_no_ai_placeholder": {"queue": "incidents"},
+            "remediation.execute_rollback": {"queue": "incidents"},
         },
         task_serializer="json",
         task_track_started=True,

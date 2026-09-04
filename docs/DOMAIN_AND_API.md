@@ -222,6 +222,31 @@ Human approval (Stage 08) is API-owned and audited:
   `waiting_for_approval` and never executes remediation; rejection moves it to
   `rejected`. Every decision writes an audit event with actor and timestamp.
 
+Approved remediation (Stage 10) resumes from the approval pause:
+
+- `POST /api/v1/recommendations/{id}/execute` — body
+  `{"incident_version": N, "expected_service_version": "0.2.0", "actor": "..."}`
+  plus required `Idempotency-Key`; returns 202 with the execution record.
+  Claims one execution row per approved recommendation, revalidates the exact
+  incident version and registered deployment versions, moves the incident
+  `waiting_for_approval → remediating`, and enqueues the worker task. Stale,
+  mismatched, forbidden, concurrent, or already-completed requests return 409
+  (`stale_version`, `invalid_state`, `forbidden_action`,
+  `execution_in_progress`, `already_completed`); same-key replays return the
+  stored record with `replayed: true`. Queue outage fails the claim visibly
+  (503 `queue_unavailable`) instead of stranding it.
+- `GET /api/v1/remediations/{id}` — execution status, attempts, and result.
+- `POST /api/v1/remediations/{id}/stop` — body
+  `{"incident_version": N, "actor": "..."}` plus required `Idempotency-Key`;
+  flags the execution; the worker observes the flag between verification
+  polls and ends unresolved.
+- The worker executes via the allowlisted payment rollback adapter
+  (`remediating → verifying`), verifies deterministic p95 recovery over a
+  bounded window, and resolves only on verified recovery
+  (`verifying → resolved`); ambiguity, failure, or stop leave the incident
+  unresolved with gaps. Unknown adapter outcomes require read-back
+  confirmation and never count as success.
+
 No API accepts raw PromQL, LogQL, TraceQL, SQL, shell commands, or arbitrary
 telemetry URLs.
 
@@ -268,6 +293,14 @@ Stage 08 adds:
 - `approvals` (one immutable decision per recommendation with actor, incident
   version, idempotency key, and timestamp);
 - `approved`/`rejected` recommendation states.
+
+Stage 10 adds:
+
+- `remediation_executions` (one lifeline per approved recommendation with
+  action, target, incident version, idempotency key, attempts, stop flag,
+  and result; terminal `completed` rejects re-execution);
+- `remediating` → `verifying` → `resolved` incident progression driven only
+  by the execution service, with `investigation_failed` for failure/stop.
 
 Later stages add:
 

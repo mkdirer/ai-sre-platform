@@ -145,3 +145,9 @@ class Settings(BaseSettings):
     bad_deployment_delay_seconds: Annotated[float, Field(ge=0.5, le=2.0)] = 1.2
     inventory_timeout_delay_seconds: Annotated[float, Field(ge=1.0, le=2.0)] = 1.5
     cpu_saturation_delay_seconds: Annotated[float, Field(ge=0.05, le=0.5)] = 0.2
+    remediation_execution_timeout_seconds: Annotated[float, Field(gt=0, le=30)] = 5.0
+    remediation_execution_max_attempts: Annotated[int, Field(ge=1, le=5)] = 2
+    remediation_verification_window_seconds: Annotated[float, Field(gt=0, le=600)] = 120.0
+    remediation_verification_poll_seconds: Annotated[float, Field(gt=0, le=60)] = 10.0
+    remediation_recovery_p95_threshold_seconds: Annotated[float, Field(gt=0, le=2.0)] = 1.0
+    remediation_required_healthy_polls: Annotated[int, Field(ge=1, le=10)] = 3

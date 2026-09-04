@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Sequence
 from typing import Annotated, Protocol
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import Body, FastAPI, Query, Request, status
 from pydantic import ValidationError
@@ -60,6 +60,12 @@ from packages.models.knowledge import (
     KnowledgePage,
     KnowledgeQuery,
 )
+from packages.models.remediation import (
+    RemediationExecuteRequest,
+    RemediationExecution,
+    RemediationExecutionResponse,
+    RemediationStopRequest,
+)
 from packages.persistence import (
     ApprovalConflict,
     ApprovalNotFound,
@@ -71,10 +77,14 @@ from packages.persistence import (
     InvestigationStoreUnavailable,
     KnowledgeStoreUnavailable,
     PendingQueueJob,
+    RemediationConflict,
+    RemediationNotFound,
+    RemediationStoreUnavailable,
     SqlAlchemyApprovalStore,
     SqlAlchemyEvidenceStore,
     SqlAlchemyIncidentStore,
     SqlAlchemyInvestigationStore,
+    SqlAlchemyRemediationStore,
 )
 from packages.rag.embeddings import EmbeddingDimensionMismatch
 from packages.task_queue import CeleryIncidentPublisher, JobPublishError, RedisDependency
@@ -158,6 +168,10 @@ class IncidentJobPublisher(Protocol):
     """Minimal queue boundary that makes transport replaceable in tests."""
 
     async def publish(self, *, job_id: UUID, incident_id: str) -> None: ...
+
+    async def publish_remediation(
+        self, *, task_id: UUID, execution_id: str, incident_id: str
+    ) -> None: ...
 
 
 class EvidenceApiStore(Protocol):
@@ -259,6 +273,32 @@ class ApprovalDecisions(Protocol):
     async def close(self) -> None: ...
 
 
+class RemediationExecutions(Protocol):
+    """Approval-gated remediation execution boundary owned by persistence."""
+
+    async def request_execution(
+        self,
+        recommendation_id: str,
+        *,
+        incident_version: int,
+        expected_service_version: str,
+        actor: str,
+        idempotency_key: str,
+    ) -> tuple[RemediationExecution, bool]: ...
+
+    async def get_execution(self, execution_id: str) -> RemediationExecution | None: ...
+
+    async def request_stop(
+        self, execution_id: str, *, incident_version: int, actor: str
+    ) -> RemediationExecution: ...
+
+    async def mark_failed(
+        self, execution_id: str, *, actor: str, details: dict[str, object]
+    ) -> RemediationExecution: ...
+
+    async def close(self) -> None: ...
+
+
 def create_app(
     settings: Settings | None = None,
     *,
@@ -270,6 +310,7 @@ def create_app(
     knowledge_embedder: KnowledgeEmbedder | None = None,
     investigation_store: InvestigationReads | None = None,
     approval_store: ApprovalDecisions | None = None,
+    remediation_store: RemediationExecutions | None = None,
 ) -> FastAPI:
     """Build the Incident API with injectable persistence and queue boundaries."""
 
@@ -297,6 +338,9 @@ def create_app(
     resolved_approval_store: ApprovalDecisions | None = approval_store or SqlAlchemyApprovalStore(
         resolved_settings
     )
+    resolved_remediation_store: RemediationExecutions = (
+        remediation_store or SqlAlchemyRemediationStore(resolved_settings)
+    )
     register_shutdown_callback(app, resolved_store.close)
     register_shutdown_callback(app, resolved_queue.close)
     register_shutdown_callback(app, resolved_evidence_store.close)
@@ -308,6 +352,7 @@ def create_app(
         register_shutdown_callback(app, resolved_investigation_store.close)
     if resolved_approval_store is not None:
         register_shutdown_callback(app, resolved_approval_store.close)
+    register_shutdown_callback(app, resolved_remediation_store.close)
 
     @app.get("/health/live", response_model=HealthResponse)
     async def liveness() -> HealthResponse:
@@ -761,7 +806,132 @@ def create_app(
             recommendation_id, ApprovalDecision.REJECTED, request, approval
         )
 
+    @app.post(
+        "/api/v1/recommendations/{recommendation_id}/execute",
+        response_model=RemediationExecutionResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        responses={
+            400: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def execute_recommendation(
+        recommendation_id: RecommendationId,
+        execution: RemediationExecuteRequest,
+        request: Request,
+    ) -> RemediationExecutionResponse:
+        """Claim an approved rollback execution and enqueue the worker task."""
+
+        idempotency_key = await require_idempotency_key(request)
+        try:
+            claimed, replayed = await resolved_remediation_store.request_execution(
+                recommendation_id,
+                incident_version=execution.incident_version,
+                expected_service_version=execution.expected_service_version,
+                actor=execution.actor,
+                idempotency_key=idempotency_key,
+            )
+        except RemediationNotFound as error:
+            raise ApiError(404, "recommendation_not_found", str(error)) from error
+        except RemediationConflict as error:
+            raise ApiError(409, error.code, str(error)) from error
+        except RemediationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "remediation persistence is unavailable"
+            ) from error
+        if not replayed:
+            try:
+                await resolved_publisher.publish_remediation(
+                    task_id=_remediation_task_id(claimed.id, idempotency_key),
+                    execution_id=claimed.id,
+                    incident_id=claimed.incident_id,
+                )
+            except JobPublishError as error:
+                try:
+                    await resolved_remediation_store.mark_failed(
+                        claimed.id,
+                        actor=execution.actor,
+                        details={"stage": "publish", "error": "queue_unavailable"},
+                    )
+                except RemediationStoreUnavailable as store_error:
+                    raise ApiError(
+                        503,
+                        "persistence_unavailable",
+                        "remediation persistence is unavailable",
+                    ) from store_error
+                raise ApiError(
+                    503, "queue_unavailable", "remediation queue publication failed"
+                ) from error
+        return RemediationExecutionResponse(execution=claimed, replayed=replayed)
+
+    @app.get(
+        "/api/v1/remediations/{execution_id}",
+        response_model=RemediationExecution,
+        responses={404: {"model": ErrorResponse}, 503: {"model": ErrorResponse}},
+    )
+    async def get_remediation(execution_id: str) -> RemediationExecution:
+        """Return one remediation execution record."""
+
+        try:
+            record = await resolved_remediation_store.get_execution(execution_id)
+        except RemediationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "remediation persistence is unavailable"
+            ) from error
+        if record is None:
+            raise ApiError(404, "remediation_not_found", "Remediation execution was not found")
+        return record
+
+    @app.post(
+        "/api/v1/remediations/{execution_id}/stop",
+        response_model=RemediationExecution,
+        responses={
+            400: {"model": ErrorResponse},
+            404: {"model": ErrorResponse},
+            409: {"model": ErrorResponse},
+            422: {"model": ErrorResponse},
+            503: {"model": ErrorResponse},
+        },
+    )
+    async def stop_remediation(
+        execution_id: str, stop: RemediationStopRequest, request: Request
+    ) -> RemediationExecution:
+        """Flag a live remediation execution for manual stop."""
+
+        await require_idempotency_key(request)
+        try:
+            return await resolved_remediation_store.request_stop(
+                execution_id,
+                incident_version=stop.incident_version,
+                actor=stop.actor,
+            )
+        except RemediationNotFound as error:
+            raise ApiError(404, "remediation_not_found", str(error)) from error
+        except RemediationConflict as error:
+            raise ApiError(409, error.code, str(error)) from error
+        except RemediationStoreUnavailable as error:
+            raise ApiError(
+                503, "persistence_unavailable", "remediation persistence is unavailable"
+            ) from error
+
     return app
+
+
+_REMEDIATION_TASK_NAMESPACE = UUID("b2c4e6a8-1d3f-4a5b-9c7d-8e6f5a4b3c2d")
+
+
+def _remediation_task_id(execution_id: str, idempotency_key: str) -> UUID:
+    """Derive a stable Celery task ID per execution attempt.
+
+    The same idempotency key always yields the same broker task ID, so
+    redelivery stays idempotent; a new key (reclaim/retry) yields a fresh
+    task ID that the result backend cannot confuse with a prior attempt.
+    """
+
+    return uuid5(_REMEDIATION_TASK_NAMESPACE, f"{execution_id}:{idempotency_key}")
 
 
 async def _publish_jobs(
