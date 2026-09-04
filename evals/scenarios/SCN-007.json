@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "SCN-007",
+  "scenario_version": 1,
+  "dataset_version": "v1",
+  "title": "Healthy with no incident",
+  "description": "No fault active and no signal above thresholds; the correct answer is null root cause with no remediation.",
+  "fault": {
+    "name": "healthy",
+    "service": "payment-service",
+    "control_path": "",
+    "expect_alert": false,
+    "alertname": ""
+  },
+  "deployments": [
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.1.0",
+      "deployed_at_offset_minutes": -10,
+      "commit_sha": "2222222222222222222222222222222222222222",
+      "role": "current_baseline"
+    }
+  ],
+  "expectation": {
+    "affected_service": "payment-service",
+    "accepted_root_causes": [],
+    "contradicted_causes": ["database_latency", "bad_deployment", "cpu_saturation"],
+    "expect_null": true,
+    "expected_recommendation": "no_action",
+    "requires_approval": false,
+    "required_templates": [],
+    "required_sources": []
+  },
+  "budgets": {
+    "max_tool_calls": 16,
+    "max_iterations": 2,
+    "max_duration_seconds": 120.0,
+    "max_cost_usd": 2.0,
+    "max_total_tokens": 50000
+  },
+  "traffic": {
+    "count": 4,
+    "timeout_seconds": 10.0,
+    "poll_deadline_seconds": 60.0
+  },
+  "edge": "none",
+  "enabled": true
+}

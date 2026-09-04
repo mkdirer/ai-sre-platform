@@ -14,9 +14,10 @@ LIVE_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre
 FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
-	test-integration migrate compose-up compose-down compose-logs smoke smoke-observability \
+	test-integration test-eval migrate compose-up compose-down compose-logs smoke smoke-observability \
 	scenario-slow-database scenario-incident-pipeline milestone1-smoke milestone2-smoke \
 	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
+	eval-fake eval-extended eval-live \
 	frontend-install frontend-lint frontend-typecheck frontend-test frontend-build frontend-e2e \
 	compose-validate check
 
@@ -99,6 +100,19 @@ ingest-knowledge:
 
 ingest-knowledge-dry-run:
 	$(UV) run python scripts/ingest_knowledge.py --dry-run
+
+eval-fake:
+	$(UV) run python scripts/run_evals.py --dataset v1 --output evals/results
+
+eval-extended:
+	$(UV) run python scripts/run_evals.py --dataset v1-extended --output evals/results
+
+eval-live:
+	@if [ -z "$${EVAL_MAX_COST_USD}" ] || [ "$${EVAL_MAX_COST_USD}" = "0" ] || [ "$${EVAL_MAX_COST_USD}" = "0.0" ]; then echo "eval-live requires an explicit budget: EVAL_MAX_COST_USD=<usd> make eval-live" >&2; exit 2; fi
+	RUN_LIVE_EVALS=1 EVAL_LIVE_CONFIRM=1 $(UV) run python scripts/run_evals.py --mode live --dataset v1-extended --output evals/results
+
+test-eval:
+	$(UV) run pytest -q tests/eval tests/unit/test_eval_schema.py tests/unit/test_eval_grader.py tests/unit/test_faults_extended.py
 
 frontend-install:
 	npm --prefix apps/frontend ci

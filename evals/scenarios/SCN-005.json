@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "SCN-005",
+  "scenario_version": 1,
+  "dataset_version": "v1",
+  "title": "CPU saturation with normal database",
+  "description": "Payment CPU pressure simulated with bounded work while database latency stays normal; CPU metric is required and DB markers are absent.",
+  "fault": {
+    "name": "cpu_saturation",
+    "service": "payment-service",
+    "control_path": "/internal/faults/cpu-saturation",
+    "expect_alert": false,
+    "alertname": ""
+  },
+  "deployments": [
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.0.9",
+      "deployed_at_offset_minutes": -90,
+      "commit_sha": "1111111111111111111111111111111111111111",
+      "role": "previous_baseline"
+    },
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.1.0",
+      "deployed_at_offset_minutes": -10,
+      "commit_sha": "2222222222222222222222222222222222222222",
+      "role": "current_baseline"
+    }
+  ],
+  "expectation": {
+    "affected_service": "payment-service",
+    "accepted_root_causes": ["cpu_saturation"],
+    "contradicted_causes": ["database_latency", "db_pool_saturation"],
+    "expect_null": false,
+    "expected_recommendation": "no_action",
+    "requires_approval": false,
+    "required_templates": ["metric.service_cpu", "log.grouped_patterns", "trace.slow_service"],
+    "required_sources": ["prometheus", "loki", "tempo", "deployment_store"]
+  },
+  "budgets": {
+    "max_tool_calls": 16,
+    "max_iterations": 2,
+    "max_duration_seconds": 120.0,
+    "max_cost_usd": 2.0,
+    "max_total_tokens": 50000
+  },
+  "traffic": {
+    "count": 6,
+    "timeout_seconds": 10.0,
+    "poll_deadline_seconds": 60.0
+  },
+  "edge": "none",
+  "enabled": true
+}

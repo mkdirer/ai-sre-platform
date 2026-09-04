@@ -141,3 +141,7 @@ class Settings(BaseSettings):
     fault_injection_allowed: bool = False
     fault_control_token: SecretStr = Field(default=SecretStr(""), repr=False)
     slow_database_delay_seconds: Annotated[float, Field(ge=2.0, le=3.0)] = 2.5
+    pool_exhaustion_delay_seconds: Annotated[float, Field(ge=0.5, le=2.0)] = 1.0
+    bad_deployment_delay_seconds: Annotated[float, Field(ge=0.5, le=2.0)] = 1.2
+    inventory_timeout_delay_seconds: Annotated[float, Field(ge=1.0, le=2.0)] = 1.5
+    cpu_saturation_delay_seconds: Annotated[float, Field(ge=0.05, le=0.5)] = 0.2

@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from prometheus_client import CONTENT_TYPE_LATEST, CollectorRegistry, Counter, Gauge, Histogram
 from prometheus_client.exposition import generate_latest
 
+from packages.models.faults import FaultName
+
 METRIC_LABEL_POLICY: dict[str, tuple[str, ...]] = {
     "demo_http_requests_total": ("service", "method", "route", "status_class"),
     "demo_http_request_errors_total": ("service", "method", "route", "error_type"),
@@ -226,9 +228,17 @@ class HttpMetrics:
     def set_slow_database_fault(self, enabled: bool) -> None:
         """Expose the single Stage 03 fault through fixed-cardinality labels."""
 
+        self.set_fault_enabled("slow_database", enabled)
+
+    def set_fault_enabled(self, fault: str, enabled: bool) -> None:
+        """Expose one allowlisted deterministic demo fault through fixed labels."""
+
+        allowed = {item.value for item in FaultName}
+        if fault not in allowed:
+            raise ValueError(f"unsupported fault metric label: {fault}")
         self._fault_enabled.labels(
             service=self.service_name,
-            fault="slow_database",
+            fault=fault,
         ).set(1 if enabled else 0)
 
     def observe_adapter_call(

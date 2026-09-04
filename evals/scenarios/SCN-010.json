@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "SCN-010",
+  "scenario_version": 1,
+  "dataset_version": "v1-extended",
+  "title": "Slow database with noisy signals",
+  "description": "Slow-database mechanism with unrelated GC and retry noise in logs; the grader still expects database_latency with grounded evidence.",
+  "fault": {
+    "name": "slow_database",
+    "service": "payment-service",
+    "control_path": "/internal/faults/slow-database",
+    "expect_alert": true,
+    "alertname": "DemoPaymentHighLatency"
+  },
+  "deployments": [
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.0.9",
+      "deployed_at_offset_minutes": -90,
+      "commit_sha": "1111111111111111111111111111111111111111",
+      "role": "previous_baseline"
+    },
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.1.0",
+      "deployed_at_offset_minutes": -10,
+      "commit_sha": "2222222222222222222222222222222222222222",
+      "role": "current_baseline"
+    }
+  ],
+  "expectation": {
+    "affected_service": "payment-service",
+    "accepted_root_causes": ["database_latency"],
+    "contradicted_causes": ["cpu_saturation", "bad_deployment"],
+    "expect_null": false,
+    "expected_recommendation": "investigate_database",
+    "requires_approval": false,
+    "required_templates": ["metric.service_latency_p95", "log.grouped_patterns", "trace.slow_service"],
+    "required_sources": ["prometheus", "loki", "tempo", "deployment_store"]
+  },
+  "budgets": {
+    "max_tool_calls": 16,
+    "max_iterations": 2,
+    "max_duration_seconds": 120.0,
+    "max_cost_usd": 2.0,
+    "max_total_tokens": 50000
+  },
+  "traffic": {
+    "count": 6,
+    "timeout_seconds": 10.0,
+    "poll_deadline_seconds": 60.0
+  },
+  "edge": "noisy_signal",
+  "enabled": true
+}

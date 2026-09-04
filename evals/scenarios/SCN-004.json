@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "SCN-004",
+  "scenario_version": 1,
+  "dataset_version": "v1",
+  "title": "Inventory upstream timeout",
+  "description": "Inventory reservation waits with bounded timeout delay; order logs and traces carry timeout markers while payment is rejected as the primary cause.",
+  "fault": {
+    "name": "inventory_timeout",
+    "service": "inventory-service",
+    "control_path": "/internal/faults/inventory-timeout",
+    "expect_alert": false,
+    "alertname": ""
+  },
+  "deployments": [
+    {
+      "service": "inventory-service",
+      "environment": "development",
+      "version": "0.0.9",
+      "deployed_at_offset_minutes": -90,
+      "commit_sha": "1111111111111111111111111111111111111111",
+      "role": "previous_baseline"
+    },
+    {
+      "service": "inventory-service",
+      "environment": "development",
+      "version": "0.1.0",
+      "deployed_at_offset_minutes": -10,
+      "commit_sha": "2222222222222222222222222222222222222222",
+      "role": "current_baseline"
+    }
+  ],
+  "expectation": {
+    "affected_service": "inventory-service",
+    "accepted_root_causes": ["upstream_timeout"],
+    "contradicted_causes": ["database_latency", "bad_deployment"],
+    "expect_null": false,
+    "expected_recommendation": "no_action",
+    "requires_approval": false,
+    "required_templates": ["metric.service_latency_p95", "log.grouped_patterns", "trace.slow_service"],
+    "required_sources": ["prometheus", "loki", "tempo", "deployment_store"]
+  },
+  "budgets": {
+    "max_tool_calls": 16,
+    "max_iterations": 2,
+    "max_duration_seconds": 120.0,
+    "max_cost_usd": 2.0,
+    "max_total_tokens": 50000
+  },
+  "traffic": {
+    "count": 6,
+    "timeout_seconds": 10.0,
+    "poll_deadline_seconds": 60.0
+  },
+  "edge": "none",
+  "enabled": true
+}

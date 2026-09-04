@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "SCN-003",
+  "scenario_version": 1,
+  "dataset_version": "v1",
+  "title": "Bad payment deployment regression",
+  "description": "Payment version change from 0.1.0 to 0.2.0 precedes latency elevation; regression is corroborated by non-deployment evidence, not correlation alone.",
+  "fault": {
+    "name": "bad_deployment",
+    "service": "payment-service",
+    "control_path": "/internal/faults/bad-deployment",
+    "expect_alert": false,
+    "alertname": ""
+  },
+  "deployments": [
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.1.0",
+      "deployed_at_offset_minutes": -90,
+      "commit_sha": "1111111111111111111111111111111111111111",
+      "role": "previous_baseline"
+    },
+    {
+      "service": "payment-service",
+      "environment": "development",
+      "version": "0.2.0",
+      "deployed_at_offset_minutes": -10,
+      "commit_sha": "3333333333333333333333333333333333333333",
+      "role": "regressed"
+    }
+  ],
+  "expectation": {
+    "affected_service": "payment-service",
+    "accepted_root_causes": ["bad_deployment"],
+    "contradicted_causes": ["database_latency", "upstream_timeout"],
+    "expect_null": false,
+    "expected_recommendation": "rollback_deployment",
+    "requires_approval": true,
+    "required_templates": [
+      "metric.service_latency_p95",
+      "deployment.current_previous",
+      "trace.slow_service"
+    ],
+    "required_sources": ["prometheus", "deployment_store", "tempo"]
+  },
+  "budgets": {
+    "max_tool_calls": 16,
+    "max_iterations": 2,
+    "max_duration_seconds": 120.0,
+    "max_cost_usd": 2.0,
+    "max_total_tokens": 50000
+  },
+  "traffic": {
+    "count": 6,
+    "timeout_seconds": 10.0,
+    "poll_deadline_seconds": 60.0
+  },
+  "edge": "none",
+  "enabled": true
+}

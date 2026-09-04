@@ -1,5 +1,18 @@
-# Markdown files
+# Markdown files (dependency-cache notes stay ignored; project documentation
+# is tracked explicitly because stage checkpoints require docs + ADRs in Git)
 *.md
+!/*.md
+!apps/**/*.md
+!docs/**/*.md
+!evals/**/*.md
+!infrastructure/**/*.md
+!knowledge/**/*.md
+!migrations/**/*.md
+!observability/**/*.md
+!packages/**/*.md
+!prompts/**/*.md
+!scripts/**/*.md
+!tests/**/*.md
 
 # Environment variables and secrets
 .env
