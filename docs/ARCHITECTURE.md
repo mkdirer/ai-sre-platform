@@ -9,12 +9,14 @@ The repository is a monorepo with four layers:
 3. Incident platform that persists, investigates, and presents incidents.
 4. Delivery and evaluation assets for repeatable local and cloud operation.
 
-Milestone 1A–1C and implementation-plan Stages 2–8 are implemented today: a working checkout,
+Milestone 1A–1C and implementation-plan Stages 2–9 are implemented today: a working checkout,
 correlated telemetry, a controlled fault-to-alert demonstration, durable asynchronous incident
 ingestion, deterministic evidence collection, an evidence-grounded LangGraph investigator,
 versioned knowledge retrieval as supporting context, a React approval UI with a durable
-approval pause, and a versioned fault-scenario eval framework with deterministic grading.
-Remediation execution and cloud layers below remain staged targets.
+approval pause, a versioned fault-scenario eval framework with deterministic grading,
+and approved rollback with deterministic recovery verification. Stage 10 delivery assets
+(Helm chart, Terraform plan-only modules, separated CI workflows) are validated but never
+applied from a development prompt; Docker Compose remains the primary local path.
 
 ## Implemented Stage 05 slice
 
@@ -151,14 +153,18 @@ ai-sre-platform/
 │   └── otel_collector/
 ├── infrastructure/
 │   ├── docker/
-│   ├── kubernetes/
 │   ├── helm/
 │   └── terraform/
 ├── docs/
-│   ├── architecture/
 │   ├── runbooks/
-│   ├── incidents/
-│   └── adr/
+│   ├── adr/
+│   ├── PRODUCT_REQUIREMENTS.md
+│   ├── ARCHITECTURE.md
+│   ├── DOMAIN_AND_API.md
+│   ├── IMPLEMENTATION_PLAN.md
+│   ├── QUALITY_GATES.md
+│   ├── SECURITY.md
+│   └── EVALS.md
 ├── evals/
 │   ├── datasets/
 │   └── scenarios/
@@ -336,8 +342,12 @@ Model names are configuration, not hard-coded domain behavior. A lower-cost conf
 
 1. Docker Compose local stack.
 2. Reproducible E2E demo.
-3. Kubernetes manifests and Helm.
-4. Terraform for GCP resources.
-5. CI/CD deployment and post-deploy E2E.
+3. Kubernetes manifests and Helm (`infrastructure/helm/ai-sre-platform/`;
+   single source of truth, validated by `make k8s-validate`).
+4. Terraform for GCP resources (`infrastructure/terraform/`; plan-only,
+   never auto-applied).
+5. CI/CD deployment and post-deploy E2E (`.github/workflows/`;
+   `platform.yml` validates+scans, `deploy.yml` builds/pushes/deploys dev
+   behind environment protection, `eval-live.yml` stays manual+budget-gated).
 
 Cloud infrastructure is not allowed to complicate or block the local implementation.

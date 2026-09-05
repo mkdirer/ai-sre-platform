@@ -1,0 +1,100 @@
+{{- /* Baseline deny-all ingress plus the exact flows the demo needs.
+  Local-only posture: NodePort ingress to frontend/gateway stays open so
+  the kind smoke test can reach the demo without an Ingress controller. */ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-default-deny
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-demo-flows
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Demo traffic between services on :8000.
+    - ports: [{ port: 8000 }]
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+    # NodePort entry points (frontend :80, grafana :3000). External client
+    # IPs have no pod identity, so this must be an ipBlock exception: a
+    # podSelector here would still deny direct nodeIP:NodePort traffic.
+    # Throwaway kind/Minikube only: production uses Ingress + TLS instead
+    # (see docs/runbooks/gcp-bootstrap.md). Port-forward access (runbook
+    # smoke test) bypasses NetworkPolicy via kubelet either way.
+    - ports:
+        - port: 80
+        - port: 3000
+      from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+    # Prometheus scrapes app metrics + worker :9464.
+    - ports:
+        - port: 8000
+        - port: 9464
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: prometheus
+    # Telemetry backends serve the collector and Grafana.
+    - ports:
+        - port: 9090
+        - port: 3100
+        - port: 3200
+        - port: 3000
+        - port: 9093
+      from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+  egress:
+    # Service DNS + intra-release traffic.
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 8000
+        - port: 9464
+        - port: 5432
+        - port: 6379
+        - port: 9090
+        - port: 9093
+        - port: 3100
+        - port: 3200
+        - port: 4317
+        - port: 4318
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+    - ports:
+        - port: 53
+          protocol: UDP
+      to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+    # Outbound HTTPS for the opt-in live-model provider only
+    # (e.g. api.openai.com:443 when the worker investigator uses OpenAI;
+    # the default fake provider needs no external egress).
+    - ports:
+        - port: 443
+          protocol: TCP
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+{{- end }}

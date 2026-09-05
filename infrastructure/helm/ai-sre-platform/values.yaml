@@ -1,0 +1,259 @@
+# Default values for ai-sre-platform (local kind/Minikube demo).
+#
+# Single-source rule: defaults mirror docker-compose.yml anchors and
+# .env.example. Where a value must differ inside Kubernetes (service DNS
+# instead of localhost), the comment says so. Do not invent new knobs
+# here without a matching compose/.env entry or an explicit comment why
+# Kubernetes needs it (e.g. storage sizes, replica counts).
+
+global:
+  # Image repository prefix. Empty = Docker Hub / explicit registry host.
+  imageRegistry: ""
+  # Demo application image (built from infrastructure/docker/demo.Dockerfile).
+  # "local" = image built locally and loaded into kind
+  # (`kind load docker-image`). CI pushes versioned tags instead.
+  # Never use "latest": the schema rejects it.
+  appImage:
+    repository: "ai-sre-platform"
+    tag: "local"
+    pullPolicy: IfNotPresent
+  frontendImage:
+    repository: "ai-sre-platform-frontend"
+    tag: "local"
+    pullPolicy: IfNotPresent
+  serviceVersion: "0.1.0" # == SERVICE_VERSION / Chart appVersion
+  environment: development # development|test only. production refuses fault control.
+
+# Shared non-secret application settings (mirrors compose x-app-environment).
+appDefaults:
+  logLevel: INFO
+  telemetryEnabled: "true"
+  otelEndpoint: "http://otel-collector:4317" # in-cluster DNS (compose: otel-collector:4317)
+  otelExportTimeoutSeconds: "2.0" # mirrors OTEL_EXPORT_TIMEOUT_SECONDS
+  otelBatchScheduleDelayMilliseconds: "500" # mirrors OTEL_BATCH_SCHEDULE_DELAY_MILLISECONDS
+  outboundTimeoutSeconds: "5.0"
+  outboundMaxAttempts: "2"
+  outboundRetryBackoffSeconds: "0.05"
+
+# Postgres connection for app pods (mirrors x-database-environment).
+# The password itself lives in the demo Secret, never here.
+database:
+  host: postgres
+  port: "5432"
+  name: aisre
+  user: aisre
+  connectTimeoutSeconds: "3.0"
+
+# Celery/Redis wiring (mirrors x-queue-environment).
+queue:
+  brokerUrl: "redis://redis:6379/0"
+  resultBackendUrl: "redis://redis:6379/1"
+  publishTimeoutSeconds: "2.0"
+  maxAttempts: "3"
+  retryBaseSeconds: "2"
+  retryMaxSeconds: "30"
+  leaseSeconds: "15"
+  visibilityTimeoutSeconds: "300"
+
+# Demo services. One entry = one Deployment + one ClusterIP Service.
+# command: uvicorn factory path. extraEnv: service-specific settings only;
+# shared settings come from appDefaults/database/queue above.
+# resources/probes follow the compose healthchecks (3s interval).
+apps:
+  gateway:
+    command: ["apps.demo.gateway.main:create_app"]
+    extraEnv:
+      ORDER_SERVICE_URL: "http://order-service:8000"
+  order-service:
+    command: ["apps.demo.order_service.main:create_app"]
+    extraEnv:
+      INVENTORY_SERVICE_URL: "http://inventory-service:8000"
+      PAYMENT_SERVICE_URL: "http://payment-service:8000"
+    needsDatabase: false
+  inventory-service:
+    command: ["apps.demo.inventory_service.main:create_app"]
+    extraEnv:
+      INVENTORY_SKU: "widget-001"
+      INVENTORY_STOCK: "100"
+      INVENTORY_UNIT_PRICE_CENTS: "1999"
+      INVENTORY_TIMEOUT_DELAY_SECONDS: "1.5"
+    faultAllowed: true
+  payment-service:
+    command: ["apps.demo.payment_service.main:create_app"]
+    needsDatabase: true
+    extraEnv:
+      SLOW_DATABASE_DELAY_SECONDS: "2.5"
+      POOL_EXHAUSTION_DELAY_SECONDS: "1.0"
+      BAD_DEPLOYMENT_DELAY_SECONDS: "1.2"
+      CPU_SATURATION_DELAY_SECONDS: "0.2"
+    faultAllowed: true
+  incident-api:
+    command: ["apps.incident_api.main:create_app"]
+    needsDatabase: true
+    needsQueue: true
+
+# Celery investigator worker (singleton: concurrency=1, queue-driven).
+worker:
+  enabled: true
+  concurrency: 1
+  metricsPort: 9464
+  evidence:
+    sourceTimeoutSeconds: "8.0"
+    maxResponseBytes: "2097152"
+    slowTraceThresholdMs: "500"
+    # Full parity with compose x-evidence-environment (domain query semantics).
+    httpTimeoutSeconds: "2.0"
+    httpMaxAttempts: "2"
+    httpRetryBackoffSeconds: "0.05"
+    maxWindowSeconds: "3600"
+    maxLookbackSeconds: "21600"
+    futureSkewSeconds: "300"
+    deploymentLookbackSeconds: "7200"
+    metricStepSeconds: "5"
+    logLimit: "50"
+    traceLimit: "10"
+    deploymentLimit: "10"
+    correlationLimit: "1000"
+  investigator:
+    enabled: "false" # opt-in only; live models never run by default
+    provider: openai
+    planningModel: gpt-5-mini
+    reasoningModel: gpt-5-mini
+    modelTimeoutSeconds: "30.0"
+    modelMaxAttempts: "2"
+    maxOutputTokensPerCall: "2048"
+    maxModelCalls: "16"
+    maxToolCalls: "16"
+    maxIterations: "2"
+    maxContextChars: "30000"
+    maxTotalTokens: "50000"
+    maxDurationSeconds: "120.0"
+    maxCostUsd: "2.0"
+    inputCostPerMillionUsd: "0.0"
+    outputCostPerMillionUsd: "0.0"
+    rootConfidenceThreshold: "0.65"
+    minCompetingHypotheses: "3"
+  knowledge:
+    provider: fake
+    embeddingModel: text-embedding-3-small
+    embeddingDimensions: "1536"
+    chunkTokens: "600"
+    chunkOverlapTokens: "100"
+    topK: "8"
+    maxTopK: "20"
+    maxContextChars: "6000"
+    maxChunkChars: "2000"
+    embeddingTimeoutSeconds: "10.0"
+  remediation:
+    executionTimeoutSeconds: "5.0"
+    executionMaxAttempts: "2"
+    verificationWindowSeconds: "120.0"
+    verificationPollSeconds: "10.0"
+    recoveryP95ThresholdSeconds: "1.0"
+    requiredHealthyPolls: "3"
+
+# React UI served by nginx; same-origin /api proxy to incident-api.
+frontend:
+  enabled: true
+  approvalActor: local-demo-approver # baked at build time, like compose ARG
+  serviceType: NodePort # NodePort for kind without a LoadBalancer
+  nodePort: 30517
+
+# Stateful demo dependencies. Images pinned exactly as in compose.
+postgres:
+  enabled: true
+  image: "pgvector/pgvector:0.8.0-pg17"
+  storageSize: 5Gi
+  storageClassName: "" # empty = cluster default (kind: standard)
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+
+redis:
+  enabled: true
+  image: "redis:8.2.9-alpine"
+  storageSize: 1Gi
+  storageClassName: ""
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { cpu: 500m, memory: 512Mi }
+
+# Alembic migration as an explicit Helm hook Job (never init containers for
+# schema changes: a failed migration must block app rollout, not crash-loop it).
+migrate:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+
+# Observability stack. Images pinned as in compose. ConfigMaps inline the
+# same semantics as observability/* (service-DNS targets). Disable pieces
+# individually for small clusters.
+observability:
+  prometheus:
+    enabled: true
+    image: "prom/prometheus:v3.13.0"
+    retentionTime: 6h
+    storageSize: 5Gi
+    storageClassName: ""
+  alertmanager:
+    enabled: true
+    image: "prom/alertmanager:v0.33.1"
+    storageSize: 1Gi
+    storageClassName: ""
+  loki:
+    enabled: true
+    image: "grafana/loki:3.7.4"
+    storageSize: 5Gi
+    storageClassName: ""
+  tempo:
+    enabled: true
+    image: "grafana/tempo:2.10.7"
+    storageSize: 5Gi
+    storageClassName: ""
+  otelCollector:
+    enabled: true
+    image: "otel/opentelemetry-collector-contrib:0.153.0"
+  grafana:
+    enabled: true
+    image: "grafana/grafana:13.2.0"
+    storageSize: 1Gi
+    storageClassName: ""
+    serviceType: NodePort
+    nodePort: 30300
+
+# HorizontalPodAutoscaler. Only stateless HTTP frontends qualify: they have
+# request metrics and scale linearly. Excluded deliberately:
+# worker (singleton Celery, concurrency=1, queue-driven → needs KEDA, out of scope),
+# postgres/redis/observability (stateful/singleton), payment/inventory (demo
+# fault state is process-local; scaling would split fault state).
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 4
+  targetCPUUtilizationPercentage: 70
+  targets:
+    - gateway
+    - order-service
+
+# Baseline deny-all NetworkPolicy plus explicit allow rules. Local-only
+# posture: NodePort ingress to frontend/gateway is open for the demo.
+networkPolicy:
+  enabled: true
+
+serviceAccount:
+  # No pod needs the Kubernetes API; tokens are not automounted.
+  automountServiceAccountToken: false
+
+# Resource defaults for the five uvicorn apps (overridable per app via
+# apps.<name>.resources). Worker/frontend specify their own below.
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits: { cpu: 500m, memory: 512Mi }
+
+workerResources:
+  requests: { cpu: 200m, memory: 256Mi }
+  limits: { cpu: "1", memory: 1Gi }
+
+frontendResources:
+  requests: { cpu: 50m, memory: 64Mi }
+  limits: { cpu: 200m, memory: 256Mi }

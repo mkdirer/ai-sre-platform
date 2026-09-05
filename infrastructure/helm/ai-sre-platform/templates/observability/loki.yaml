@@ -1,0 +1,120 @@
+{{- if .Values.observability.loki.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-loki-config
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+data:
+  loki.yaml: |
+    auth_enabled: false
+    server: { http_listen_port: 3100 }
+    common:
+      path_prefix: /loki
+      replication_factor: 1
+      storage: { filesystem: { chunks_directory: /loki/chunks, rules_directory: /loki/rules } }
+    schema_config:
+      configs:
+        - { from: 2024-01-01, store: tsdb, object_store: filesystem, schema: v13, index: { prefix: loki_, period: 24h } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "loki" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3100
+      targetPort: 3100
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "loki" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "loki" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  replicas: 1 # Single-binary demo mode.
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "loki" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "loki" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: loki
+          image: {{ .Values.observability.loki.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["-config.file=/etc/loki/loki.yaml"]
+          ports:
+            - name: http
+              containerPort: 3100
+          volumeMounts:
+            - name: config
+              mountPath: /etc/loki/loki.yaml
+              subPath: loki.yaml
+            - name: data
+              mountPath: /loki
+          livenessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /ready, port: 3100 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Data writes require a writable fs here (accepted local-demo risk;
+# see docs/runbooks/scan-triage.md).
+            readOnlyRootFilesystem: false # Chunks/rules writes.
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ai-sre.fullname" . }}-loki-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-sre.fullname" . }}-loki-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-loki-data
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.observability.loki.storageClassName }}
+  storageClassName: {{ .Values.observability.loki.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.observability.loki.storageSize | quote }}
+{{- end }}

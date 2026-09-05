@@ -19,6 +19,7 @@ FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
 	eval-fake eval-extended eval-live \
 	frontend-install frontend-lint frontend-typecheck frontend-test frontend-build frontend-e2e \
+	helm-lint helm-template k8s-validate tf-fmt tf-validate \
 	compose-validate check
 
 setup: sync
@@ -137,5 +138,23 @@ frontend-e2e:
 
 compose-validate:
 	$(COMPOSE) config --quiet
+
+# Stage 10 delivery gates. Kept out of `check`: helm/terraform are
+# provisioned by platform CI, not every dev machine (see runbooks).
+helm-lint:
+	helm lint infrastructure/helm/ai-sre-platform
+
+helm-template:
+	helm template ai-sre-demo infrastructure/helm/ai-sre-platform --namespace ai-sre-demo > /dev/null
+
+k8s-validate:
+	$(UV) run python scripts/validate_platform.py
+
+tf-fmt:
+	terraform -chdir=infrastructure/terraform fmt -check -recursive
+
+tf-validate:
+	terraform -chdir=infrastructure/terraform init -backend=false -input=false
+	terraform -chdir=infrastructure/terraform validate -no-color
 
 check: sync lint format-check typecheck test compose-validate

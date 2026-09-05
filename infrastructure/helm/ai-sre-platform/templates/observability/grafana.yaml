@@ -1,0 +1,136 @@
+{{- if .Values.observability.grafana.enabled }}
+# Anonymous Viewer mirrors the local compose posture for kind demos.
+# Never expose this Service beyond localhost port-forward/NodePort.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-grafana-datasources
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - { name: Prometheus, type: prometheus, access: proxy, url: http://prometheus:9090, isDefault: true }
+      - { name: Loki, type: loki, access: proxy, url: http://loki:3100 }
+      - { name: Tempo, type: tempo, access: proxy, url: http://tempo:3200 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "grafana" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  type: {{ .Values.observability.grafana.serviceType }}
+  {{- if eq .Values.observability.grafana.serviceType "NodePort" }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: {{ .Values.observability.grafana.nodePort }}
+  {{- else }}
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+  {{- end }}
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "grafana" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "grafana" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "grafana" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "grafana" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          image: {{ .Values.observability.grafana.image | quote }}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Viewer
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: data
+              mountPath: /var/lib/grafana
+          livenessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /api/health, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Data writes require a writable fs here (accepted local-demo risk;
+# see docs/runbooks/scan-triage.md).
+            readOnlyRootFilesystem: false # Grafana home + plugins writes.
+            runAsNonRoot: true
+            runAsUser: 472
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: datasources
+          configMap:
+            name: {{ include "ai-sre.fullname" . }}-grafana-datasources
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-sre.fullname" . }}-grafana-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-grafana-data
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.observability.grafana.storageClassName }}
+  storageClassName: {{ .Values.observability.grafana.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.observability.grafana.storageSize | quote }}
+{{- end }}

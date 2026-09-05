@@ -1,0 +1,275 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ai-sre-platform dev values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "global",
+    "appDefaults",
+    "database",
+    "queue",
+    "apps",
+    "worker",
+    "frontend",
+    "postgres",
+    "redis",
+    "migrate",
+    "observability",
+    "autoscaling",
+    "networkPolicy",
+    "serviceAccount",
+    "resources",
+    "workerResources",
+    "frontendResources"
+  ],
+  "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["imageRegistry", "appImage", "frontendImage", "serviceVersion", "environment"],
+      "properties": {
+        "imageRegistry": { "type": "string" },
+        "appImage": { "$ref": "#/definitions/pinnedImage" },
+        "frontendImage": { "$ref": "#/definitions/pinnedImage" },
+        "serviceVersion": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "environment": { "type": "string", "enum": ["development", "test"] }
+      }
+    },
+    "appDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["logLevel", "telemetryEnabled", "otelEndpoint"],
+      "properties": {
+        "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR"] },
+        "telemetryEnabled": { "type": "string", "enum": ["true", "false"] },
+        "otelEndpoint": { "type": "string", "minLength": 1 },
+        "otelExportTimeoutSeconds": { "type": "string", "minLength": 1 },
+        "otelBatchScheduleDelayMilliseconds": { "type": "string", "minLength": 1 },
+        "outboundTimeoutSeconds": { "type": "string", "minLength": 1 },
+        "outboundMaxAttempts": { "type": "string", "minLength": 1 },
+        "outboundRetryBackoffSeconds": { "type": "string", "minLength": 1 }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host", "port", "name", "user", "connectTimeoutSeconds"],
+      "properties": {
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "string", "pattern": "^[0-9]{2,5}$" },
+        "name": { "type": "string", "minLength": 1 },
+        "user": { "type": "string", "minLength": 1 },
+        "connectTimeoutSeconds": { "type": "string", "minLength": 1 }
+      }
+    },
+    "queue": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["brokerUrl", "resultBackendUrl"],
+      "properties": {
+        "brokerUrl": { "type": "string", "pattern": "^redis://[^:]+:[0-9]+/[0-9]+$" },
+        "resultBackendUrl": { "type": "string", "pattern": "^redis://[^:]+:[0-9]+/[0-9]+$" }
+      }
+    },
+    "apps": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command"],
+        "properties": {
+          "command": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+          "extraEnv": { "type": "object", "additionalProperties": { "type": "string" } },
+          "needsDatabase": { "type": "boolean" },
+          "needsQueue": { "type": "boolean" },
+          "faultAllowed": { "type": "boolean" },
+          "resources": { "$ref": "#/definitions/resources" }
+        }
+      }
+    },
+    "worker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "concurrency", "metricsPort", "evidence", "investigator", "knowledge", "remediation"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "metricsPort": { "type": "integer", "minimum": 1024, "maximum": 65535 },
+        "evidence": { "type": "object", "additionalProperties": { "type": "string" } },
+        "investigator": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "provider"],
+          "properties": {
+            "enabled": { "type": "string", "enum": ["true", "false"] },
+            "provider": { "type": "string", "minLength": 1 },
+            "planningModel": { "type": "string", "minLength": 1 },
+            "reasoningModel": { "type": "string", "minLength": 1 },
+            "modelTimeoutSeconds": { "type": "string", "minLength": 1 },
+            "modelMaxAttempts": { "type": "string", "minLength": 1 },
+            "maxOutputTokensPerCall": { "type": "string", "minLength": 1 },
+            "maxModelCalls": { "type": "string", "minLength": 1 },
+            "maxToolCalls": { "type": "string", "minLength": 1 },
+            "maxIterations": { "type": "string", "minLength": 1 },
+            "maxContextChars": { "type": "string", "minLength": 1 },
+            "maxTotalTokens": { "type": "string", "minLength": 1 },
+            "maxDurationSeconds": { "type": "string", "minLength": 1 },
+            "maxCostUsd": { "type": "string", "minLength": 1 },
+            "inputCostPerMillionUsd": { "type": "string", "minLength": 1 },
+            "outputCostPerMillionUsd": { "type": "string", "minLength": 1 },
+            "rootConfidenceThreshold": { "type": "string", "minLength": 1 },
+            "minCompetingHypotheses": { "type": "string", "minLength": 1 }
+          }
+        },
+        "knowledge": { "type": "object", "additionalProperties": true },
+        "remediation": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "approvalActor", "serviceType", "nodePort"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "approvalActor": { "type": "string", "minLength": 1 },
+        "serviceType": { "type": "string", "enum": ["ClusterIP", "NodePort"] },
+        "nodePort": { "type": "integer", "minimum": 30000, "maximum": 32767 }
+      }
+    },
+    "postgres": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "storageSize", "storageClassName", "resources"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/pinnedImageRef" },
+        "storageSize": { "$ref": "#/definitions/storageSize" },
+        "storageClassName": { "type": "string" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "redis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "image", "storageSize", "storageClassName", "resources"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/pinnedImageRef" },
+        "storageSize": { "$ref": "#/definitions/storageSize" },
+        "storageClassName": { "type": "string" },
+        "resources": { "$ref": "#/definitions/resources" }
+      }
+    },
+    "migrate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "backoffLimit", "activeDeadlineSeconds"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "backoffLimit": { "type": "integer", "minimum": 0, "maximum": 6 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 60, "maximum": 1800 }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prometheus", "alertmanager", "loki", "tempo", "otelCollector", "grafana"],
+      "properties": {
+        "prometheus": { "$ref": "#/definitions/observedComponent" },
+        "alertmanager": { "$ref": "#/definitions/observedComponent" },
+        "loki": { "$ref": "#/definitions/observedComponent" },
+        "tempo": { "$ref": "#/definitions/observedComponent" },
+        "otelCollector": { "$ref": "#/definitions/observedComponent" },
+        "grafana": {
+          "allOf": [
+            { "$ref": "#/definitions/observedComponent" },
+            {
+              "type": "object",
+              "required": ["serviceType", "nodePort"],
+              "properties": {
+                "serviceType": { "type": "string", "enum": ["ClusterIP", "NodePort"] },
+                "nodePort": { "type": "integer", "minimum": 30000, "maximum": 32767 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "autoscaling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "minReplicas", "maxReplicas", "targetCPUUtilizationPercentage", "targets"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "maxReplicas": { "type": "integer", "minimum": 1, "maximum": 16 },
+        "targetCPUUtilizationPercentage": { "type": "integer", "minimum": 10, "maximum": 95 },
+        "targets": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": { "enabled": { "type": "boolean" } }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automountServiceAccountToken"],
+      "properties": { "automountServiceAccountToken": { "type": "boolean" } }
+    },
+    "resources": { "$ref": "#/definitions/resources" },
+    "workerResources": { "$ref": "#/definitions/resources" },
+    "frontendResources": { "$ref": "#/definitions/resources" }
+  },
+  "definitions": {
+    "pinnedImage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "pullPolicy"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string", "minLength": 1, "not": { "enum": ["latest"] } },
+        "pullPolicy": { "type": "string", "enum": ["IfNotPresent", "Always", "Never"] }
+      }
+    },
+    "pinnedImageRef": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^.+:.+$",
+      "not": { "pattern": ":latest$" }
+    },
+    "storageSize": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requests", "limits"],
+      "properties": {
+        "requests": { "$ref": "#/definitions/resourceSet" },
+        "limits": { "$ref": "#/definitions/resourceSet" }
+      }
+    },
+    "resourceSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu", "memory"],
+      "properties": {
+        "cpu": { "type": ["string", "number"] },
+        "memory": { "type": "string" }
+      }
+    },
+    "observedComponent": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["enabled", "image"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "$ref": "#/definitions/pinnedImageRef" },
+        "storageSize": { "$ref": "#/definitions/storageSize" },
+        "storageClassName": { "type": "string" }
+      }
+    }
+  }
+}

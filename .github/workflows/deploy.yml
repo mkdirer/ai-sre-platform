@@ -1,0 +1,205 @@
+name: Deploy dev
+
+# Main-branch delivery to the dev GKE cluster. Planning (platform.yml) is
+# separate from this workflow: every GCP identifier comes from repository
+# variables, auth uses Workload Identity Federation (no keys), and the dev
+# environment protection gate must approve before anything mutates.
+#
+# One-time setup (pool, AR host, cluster, GitHub environment + variables)
+# is documented in docs/runbooks/gcp-bootstrap.md and is NOT performed here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Override image tag (default: dev-<sha>)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+env:
+  HELM_VERSION: v3.17.3
+
+jobs:
+  guard:
+    name: Require deployment configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Fail fast on missing variables
+        run: |
+          missing=""
+          for name in GCP_PROJECT_ID GKE_CLUSTER GKE_ZONE AR_HOST AR_REPO WIF_PROVIDER WIF_SERVICE_ACCOUNT K8S_NAMESPACE HELM_RELEASE; do
+            value="$(printenv "$name")"
+            if [ -z "$value" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing repository variables:$missing" >&2
+            echo "Configure them per docs/runbooks/gcp-bootstrap.md; refusing to guess." >&2
+            exit 1
+          fi
+          echo "deployment configuration present"
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GKE_CLUSTER: ${{ vars.GKE_CLUSTER }}
+          GKE_ZONE: ${{ vars.GKE_ZONE }}
+          AR_HOST: ${{ vars.AR_HOST }}
+          AR_REPO: ${{ vars.AR_REPO }}
+          WIF_PROVIDER: ${{ vars.WIF_PROVIDER }}
+          WIF_SERVICE_ACCOUNT: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          K8S_NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+          HELM_RELEASE: ${{ vars.HELM_RELEASE }}
+
+  build:
+    name: Build, SBOM, provenance, push
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        image:
+          - name: app
+            dockerfile: infrastructure/docker/demo.Dockerfile
+            context: .
+          - name: frontend
+            dockerfile: infrastructure/docker/frontend.Dockerfile
+            context: .
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to GCP (Workload Identity, no keys)
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Resolve image tag (override or versioned default)
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="dev-${{ github.sha }}"; fi
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Artifact Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ vars.AR_HOST }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - name: Build and push with SBOM and provenance attestations
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: ${{ matrix.image.context }}
+          file: ${{ matrix.image.dockerfile }}
+          push: true
+          tags: >-
+            ${{ vars.AR_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}/${{ matrix.image.name }}:${{ steps.tag.outputs.value }}
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            VITE_APPROVAL_ACTOR=local-demo-approver
+
+      - name: Record image digest
+        run: echo "${{ matrix.image.name }}@${{ steps.build.outputs.digest }}" | tee image-digest.txt
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ matrix.image.name }}
+          path: image-digest.txt
+          retention-days: 30
+
+  deploy-dev:
+    name: Deploy dev and smoke test
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: dev
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download image digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: image-digests
+          merge-multiple: true
+
+      - name: Authenticate to GCP (Workload Identity, no keys)
+        id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+          token_format: access_token
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v3.17.3
+
+      - name: Resolve image tag (must match the build job)
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag }}"
+          if [ -z "$TAG" ]; then TAG="dev-${{ github.sha }}"; fi
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Get GKE credentials
+        run: >
+          gcloud container clusters get-credentials "${{ vars.GKE_CLUSTER }}"
+          --zone "${{ vars.GKE_ZONE }}" --project "${{ vars.GCP_PROJECT_ID }}"
+
+      - name: Helm upgrade (migration Job runs first via hook)
+        run: |
+          APP_TAG="${{ steps.tag.outputs.value }}"
+          helm upgrade --install "${{ vars.HELM_RELEASE }}" infrastructure/helm/ai-sre-platform \
+            --namespace "${{ vars.K8S_NAMESPACE }}" --create-namespace \
+            --set global.imageRegistry="${{ vars.AR_HOST }}/${{ vars.GCP_PROJECT_ID }}/${{ vars.AR_REPO }}" \
+            --set global.appImage.tag="$APP_TAG" \
+            --set global.frontendImage.tag="$APP_TAG" \
+            --wait --timeout 10m
+
+      - name: Post-deploy bounded smoke test
+        run: |
+          NAMESPACE="${{ vars.K8S_NAMESPACE }}" RELEASE_NAME="${{ vars.HELM_RELEASE }}" \
+            bash scripts/post_deploy_smoke.sh
+
+      - name: Collect redacted diagnostics on failure
+        if: failure()
+        run: |
+          helm status "${{ vars.HELM_RELEASE }}" -n "${{ vars.K8S_NAMESPACE }}" > helm-status.txt || true
+          kubectl -n "${{ vars.K8S_NAMESPACE }}" logs --tail=200 -l app.kubernetes.io/instance="${{ vars.HELM_RELEASE }}" > pods.log || true
+          uv run python scripts/redact_secrets.py helm-status.txt > helm-status.redacted.txt
+          uv run python scripts/redact_secrets.py pods.log > pods.redacted.log
+          mkdir -p deploy-artifacts && mv helm-status.redacted.txt pods.redacted.log deploy-artifacts/
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deploy-failure-diagnostics
+          path: deploy-artifacts/
+          retention-days: 30

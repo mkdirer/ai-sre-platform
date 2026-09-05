@@ -1,0 +1,214 @@
+{{- if .Values.worker.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: investigator-worker
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "investigator-worker" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  # ClusterIP only: Prometheus scrapes :9464 inside the cluster.
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9464
+      targetPort: {{ .Values.worker.metricsPort }}
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "investigator-worker" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: investigator-worker
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "investigator-worker" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  # Singleton by design: Celery concurrency=1 with DB row-lock claiming.
+  # Do not scale without reworking claim/lease semantics (see ADR-0005).
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "investigator-worker" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "investigator-worker" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-worker
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        {{- include "ai-sre.podSecurity" . | nindent 8 }}
+      containers:
+        - name: worker
+          image: {{ include "ai-sre.appImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.appImage.pullPolicy }}
+          command:
+            - celery
+            - -A
+            - apps.investigator_worker.celery_app:celery_app
+            - worker
+            - --loglevel=INFO
+            - --concurrency={{ .Values.worker.concurrency | quote }}
+            - --hostname=investigator@%h
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.worker.metricsPort }}
+          # Writable /tmp mirrors the compose tmpfs; the read-only root
+          # filesystem below would otherwise diverge from local runs.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          env:
+            {{- include "ai-sre.appEnv" . | nindent 12 }}
+            {{- include "ai-sre.dbEnv" . | nindent 12 }}
+            {{- include "ai-sre.queueEnv" . | nindent 12 }}
+            - name: PROMETHEUS_URL
+              value: "http://prometheus:9090"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            - name: TEMPO_URL
+              value: "http://tempo:3200"
+            # Remediation target (mirrors compose x-investigator-environment).
+            - name: PAYMENT_SERVICE_URL
+              value: "http://payment-service:8000"
+            - name: FAULT_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-sre.fullname" . }}-demo-secrets
+                  key: fault-control-token
+            - name: EVIDENCE_SOURCE_TIMEOUT_SECONDS
+              value: {{ .Values.worker.evidence.sourceTimeoutSeconds | quote }}
+            - name: EVIDENCE_MAX_RESPONSE_BYTES
+              value: {{ .Values.worker.evidence.maxResponseBytes | quote }}
+            - name: EVIDENCE_SLOW_TRACE_THRESHOLD_MS
+              value: {{ .Values.worker.evidence.slowTraceThresholdMs | quote }}
+            - name: EVIDENCE_HTTP_TIMEOUT_SECONDS
+              value: {{ .Values.worker.evidence.httpTimeoutSeconds | quote }}
+            - name: EVIDENCE_HTTP_MAX_ATTEMPTS
+              value: {{ .Values.worker.evidence.httpMaxAttempts | quote }}
+            - name: EVIDENCE_HTTP_RETRY_BACKOFF_SECONDS
+              value: {{ .Values.worker.evidence.httpRetryBackoffSeconds | quote }}
+            - name: EVIDENCE_MAX_WINDOW_SECONDS
+              value: {{ .Values.worker.evidence.maxWindowSeconds | quote }}
+            - name: EVIDENCE_MAX_LOOKBACK_SECONDS
+              value: {{ .Values.worker.evidence.maxLookbackSeconds | quote }}
+            - name: EVIDENCE_FUTURE_SKEW_SECONDS
+              value: {{ .Values.worker.evidence.futureSkewSeconds | quote }}
+            - name: EVIDENCE_DEPLOYMENT_LOOKBACK_SECONDS
+              value: {{ .Values.worker.evidence.deploymentLookbackSeconds | quote }}
+            - name: EVIDENCE_METRIC_STEP_SECONDS
+              value: {{ .Values.worker.evidence.metricStepSeconds | quote }}
+            - name: EVIDENCE_LOG_LIMIT
+              value: {{ .Values.worker.evidence.logLimit | quote }}
+            - name: EVIDENCE_TRACE_LIMIT
+              value: {{ .Values.worker.evidence.traceLimit | quote }}
+            - name: EVIDENCE_DEPLOYMENT_LIMIT
+              value: {{ .Values.worker.evidence.deploymentLimit | quote }}
+            - name: EVIDENCE_CORRELATION_LIMIT
+              value: {{ .Values.worker.evidence.correlationLimit | quote }}
+            - name: INVESTIGATOR_ENABLED
+              value: {{ .Values.worker.investigator.enabled | quote }}
+            - name: INVESTIGATOR_PROVIDER
+              value: {{ .Values.worker.investigator.provider | quote }}
+            - name: INVESTIGATOR_PLANNING_MODEL
+              value: {{ .Values.worker.investigator.planningModel | quote }}
+            - name: INVESTIGATOR_REASONING_MODEL
+              value: {{ .Values.worker.investigator.reasoningModel | quote }}
+            - name: INVESTIGATOR_MODEL_TIMEOUT_SECONDS
+              value: {{ .Values.worker.investigator.modelTimeoutSeconds | quote }}
+            - name: INVESTIGATOR_MODEL_MAX_ATTEMPTS
+              value: {{ .Values.worker.investigator.modelMaxAttempts | quote }}
+            - name: INVESTIGATOR_MAX_OUTPUT_TOKENS_PER_CALL
+              value: {{ .Values.worker.investigator.maxOutputTokensPerCall | quote }}
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-sre.fullname" . }}-demo-secrets
+                  key: openai-api-key
+            - name: INVESTIGATOR_MAX_MODEL_CALLS
+              value: {{ .Values.worker.investigator.maxModelCalls | quote }}
+            - name: INVESTIGATOR_MAX_TOOL_CALLS
+              value: {{ .Values.worker.investigator.maxToolCalls | quote }}
+            - name: INVESTIGATOR_MAX_ITERATIONS
+              value: {{ .Values.worker.investigator.maxIterations | quote }}
+            - name: INVESTIGATOR_MAX_CONTEXT_CHARS
+              value: {{ .Values.worker.investigator.maxContextChars | quote }}
+            - name: INVESTIGATOR_MAX_TOTAL_TOKENS
+              value: {{ .Values.worker.investigator.maxTotalTokens | quote }}
+            - name: INVESTIGATOR_MAX_DURATION_SECONDS
+              value: {{ .Values.worker.investigator.maxDurationSeconds | quote }}
+            - name: INVESTIGATOR_MAX_ESTIMATED_COST_USD
+              value: {{ .Values.worker.investigator.maxCostUsd | quote }}
+            - name: INVESTIGATOR_INPUT_COST_PER_MILLION_USD
+              value: {{ .Values.worker.investigator.inputCostPerMillionUsd | quote }}
+            - name: INVESTIGATOR_OUTPUT_COST_PER_MILLION_USD
+              value: {{ .Values.worker.investigator.outputCostPerMillionUsd | quote }}
+            - name: INVESTIGATOR_ROOT_CONFIDENCE_THRESHOLD
+              value: {{ .Values.worker.investigator.rootConfidenceThreshold | quote }}
+            - name: INVESTIGATOR_MIN_COMPETING_HYPOTHESES
+              value: {{ .Values.worker.investigator.minCompetingHypotheses | quote }}
+            - name: KNOWLEDGE_PROVIDER
+              value: {{ .Values.worker.knowledge.provider | quote }}
+            - name: KNOWLEDGE_EMBEDDING_MODEL
+              value: {{ .Values.worker.knowledge.embeddingModel | quote }}
+            - name: KNOWLEDGE_EMBEDDING_DIMENSIONS
+              value: {{ .Values.worker.knowledge.embeddingDimensions | quote }}
+            - name: KNOWLEDGE_CHUNK_TOKENS
+              value: {{ .Values.worker.knowledge.chunkTokens | quote }}
+            - name: KNOWLEDGE_CHUNK_OVERLAP_TOKENS
+              value: {{ .Values.worker.knowledge.chunkOverlapTokens | quote }}
+            - name: KNOWLEDGE_TOP_K
+              value: {{ .Values.worker.knowledge.topK | quote }}
+            - name: KNOWLEDGE_MAX_TOP_K
+              value: {{ .Values.worker.knowledge.maxTopK | quote }}
+            - name: KNOWLEDGE_MAX_CONTEXT_CHARS
+              value: {{ .Values.worker.knowledge.maxContextChars | quote }}
+            - name: KNOWLEDGE_MAX_CHUNK_CHARS
+              value: {{ .Values.worker.knowledge.maxChunkChars | quote }}
+            - name: KNOWLEDGE_EMBEDDING_TIMEOUT_SECONDS
+              value: {{ .Values.worker.knowledge.embeddingTimeoutSeconds | quote }}
+            - name: REMEDIATION_EXECUTION_TIMEOUT_SECONDS
+              value: {{ .Values.worker.remediation.executionTimeoutSeconds | quote }}
+            - name: REMEDIATION_EXECUTION_MAX_ATTEMPTS
+              value: {{ .Values.worker.remediation.executionMaxAttempts | quote }}
+            - name: REMEDIATION_VERIFICATION_WINDOW_SECONDS
+              value: {{ .Values.worker.remediation.verificationWindowSeconds | quote }}
+            - name: REMEDIATION_VERIFICATION_POLL_SECONDS
+              value: {{ .Values.worker.remediation.verificationPollSeconds | quote }}
+            - name: REMEDIATION_RECOVERY_P95_THRESHOLD_SECONDS
+              value: {{ .Values.worker.remediation.recoveryP95ThresholdSeconds | quote }}
+            - name: REMEDIATION_REQUIRED_HEALTHY_POLLS
+              value: {{ .Values.worker.remediation.requiredHealthyPolls | quote }}
+          # No /health endpoint on the worker: liveness is the metrics
+          # server, readiness is a real Celery ping like compose.
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: {{ .Values.worker.metricsPort }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - apps.investigator_worker.celery_app:celery_app
+                - inspect
+                - ping
+                - --destination
+                - investigator@investigator-worker
+                - --timeout
+                - "2"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 8
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.workerResources | nindent 12 }}
+          securityContext:
+            {{- include "ai-sre.containerSecurity" . | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

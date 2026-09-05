@@ -1,0 +1,39 @@
+{{- /* HPA only for stateless HTTP frontends with request metrics.
+  Everything else is deliberately excluded (see values.yaml comment):
+  worker is a singleton queue consumer (needs KEDA, out of scope),
+  data/observability components are stateful singletons, and demo fault
+  state is process-local so scaling payment/inventory would fork it. */ -}}
+{{- if .Values.autoscaling.enabled }}
+{{- range $target := .Values.autoscaling.targets }}
+{{- if hasKey $.Values.apps $target }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ $target }}
+  labels:
+    app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/component: {{ $target }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ $target }}
+  minReplicas: {{ $.Values.autoscaling.minReplicas }}
+  maxReplicas: {{ $.Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ $.Values.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120
+{{- end }}
+{{- end }}
+{{- end }}

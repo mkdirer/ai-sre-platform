@@ -221,6 +221,17 @@ Acceptance:
 
 Goal: deployment assets that do not compromise the local demo.
 
+Status: implemented in repository Stage 11. The Helm chart
+(`infrastructure/helm/ai-sre-platform/`) deploys every demo component
+with probes, resources, security contexts, HPA for stateless frontends,
+and a migration hook Job, validated by lint/render/kubeconform
+(`make k8s-validate`); Terraform modules (network, GKE, Cloud SQL with
+pgvector, Artifact Registry, Secret Manager, service accounts) validate
+with fmt/validate only and never apply; GitHub Actions separate planning
+(`platform.yml`: Helm/Terraform/scans) from dev delivery (`deploy.yml`:
+versioned build, SBOM/provenance, WIF push, protected-environment deploy,
+post-deploy smoke) with manual budget-gated live evals (`eval-live.yml`).
+
 Order:
 
 1. Kubernetes on a local cluster;

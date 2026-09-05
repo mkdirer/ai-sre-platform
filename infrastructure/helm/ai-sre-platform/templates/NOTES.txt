@@ -1,0 +1,15 @@
+{{- /* Release notes: reachability depends on cluster type. */ -}}
+ai-sre-platform {{ .Chart.AppVersion }} installed in namespace {{ .Release.Namespace }}.
+
+Demo entry points (NodePort, kind/Minikube):
+  checkout : http://<node-ip>:{{ .Values.frontend.nodePort }} (UI) — API at /api
+  grafana  : http://<node-ip>:{{ .Values.observability.grafana.nodePort }}
+
+Useful next steps:
+  kubectl --namespace {{ .Release.Namespace }} get pods
+  kubectl --namespace {{ .Release.Namespace }} logs job/{{ include "ai-sre.fullname" . }}-migrate
+  kubectl --namespace {{ .Release.Namespace }} port-forward svc/gateway 8001:8000
+
+Fault control still requires FAULT_CONTROL_TOKEN and a development/test
+environment; placeholder secrets in this release are local-demo only.
+See docs/runbooks/local-kubernetes.md for the full smoke test.

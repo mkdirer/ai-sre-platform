@@ -1,0 +1,111 @@
+{{- /* One Deployment + ClusterIP Service per entry in .Values.apps.
+  Service-specific settings live in values.yaml next to the entry, so a
+  new demo service is one values block, not a new template. */ -}}
+{{- range $name, $svc := .Values.apps }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  selector:
+    app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/component: {{ $name }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "ai-sre.name" $ }}
+        app.kubernetes.io/instance: {{ $.Release.Name }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" $ }}-app
+      automountServiceAccountToken: {{ $.Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        {{- include "ai-sre.podSecurity" $ | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "ai-sre.appImage" $ | quote }}
+          imagePullPolicy: {{ $.Values.global.appImage.pullPolicy }}
+          command: ["uvicorn"]
+          args:
+            - {{ index $svc.command 0 | quote }}
+            - --factory
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --no-access-log
+          ports:
+            - name: http
+              containerPort: 8000
+          # Writable /tmp mirrors the compose tmpfs (x-demo-service) so the
+          # read-only root filesystem below keeps parity with local runs.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          env:
+            {{- include "ai-sre.appEnv" $ | nindent 12 }}
+            {{- if $svc.needsDatabase }}
+            {{- include "ai-sre.dbEnv" $ | nindent 12 }}
+            {{- end }}
+            {{- if $svc.needsQueue }}
+            {{- include "ai-sre.queueEnv" $ | nindent 12 }}
+            {{- end }}
+            {{- with $svc.extraEnv }}
+            {{- range $key, $value := . }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if $svc.faultAllowed }}
+            - name: FAULT_INJECTION_ALLOWED
+              value: "true"
+            - name: FAULT_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ai-sre.fullname" $ }}-demo-secrets
+                  key: fault-control-token
+            {{- end }}
+          {{- include "ai-sre.httpProbes" $ | nindent 10 }}
+          resources:
+            {{- if $svc.resources }}
+            {{- toYaml $svc.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml $.Values.resources | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- include "ai-sre.containerSecurity" $ | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+{{- end }}

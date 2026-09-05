@@ -89,7 +89,7 @@ x-investigator-environment: &investigator-environment
   REMEDIATION_RECOVERY_P95_THRESHOLD_SECONDS: ${REMEDIATION_RECOVERY_P95_THRESHOLD_SECONDS:-1.0}
   REMEDIATION_REQUIRED_HEALTHY_POLLS: ${REMEDIATION_REQUIRED_HEALTHY_POLLS:-3}
 x-demo-service: &demo-service
-  image: ai-sre-platform:stage05
+  image: ai-sre-platform:local
   build:
     context: .
     dockerfile: infrastructure/docker/demo.Dockerfile

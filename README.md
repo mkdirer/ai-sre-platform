@@ -1,13 +1,15 @@
 # AI SRE Incident Investigation Platform
 
 This repository is being built into an evidence-grounded incident investigation platform. The
-current vertical slice is **Stage 09 / implementation-plan Stage 8**: Milestone 1 and the
-Stage 05 deterministic evidence run remain working, an opt-in LangGraph investigator turns
-canonical evidence into a schema-validated report with deterministic grounding, versioned
-knowledge retrieval provides supporting historical context with pgvector, a small React
-frontend reviews incidents and records human approve/reject decisions without executing
-remediation, and a reproducible eval framework grades seven core fault scenarios plus five
-edge fixtures offline with scripted providers.
+current vertical slice is **Stage 10 / implementation-plan Stage 9 plus validated delivery
+assets**: Milestone 1 and the Stage 05 deterministic evidence run remain working, an opt-in
+LangGraph investigator turns canonical evidence into a schema-validated report with
+deterministic grounding, versioned knowledge retrieval provides supporting historical context
+with pgvector, a small React frontend reviews incidents and records human approve/reject
+decisions, approved rollback executes through an allowlisted adapter with deterministic
+recovery verification, a reproducible eval framework grades core fault scenarios offline with
+scripted providers, and Helm/Terraform/CI delivery assets validate without applying cloud
+changes (Docker Compose remains the primary local path).
 
 The implemented request path is:
 
@@ -101,7 +103,8 @@ thresholds over a bounded window verify recovery (`GET
 /api/v1/remediations/{id}`); `POST .../stop` ends execution unresolved.
 Recovery resolves the incident; ambiguity, failure, or stop never does.
 
-Explicitly deferred are Kubernetes and cloud resources. The Stage 03 receiver remains available only in the `test-tools`
+Kubernetes manifests, Terraform plans, and CI pipelines exist as validated,
+never-applied delivery assets (see below). The Stage 03 receiver remains available only in the `test-tools`
 Compose profile and its contract test; Alertmanager no longer targets it.
 
 ## Reproducible evals (Stage 09)
@@ -134,6 +137,29 @@ It refuses to run without both flags and a positive cost budget, generates at mo
 checkouts per scenario, and always attempts fault cleanup. Paid model evals are not run
 without explicit approval. See [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md)
 and `evals/datasets/v1/README.md`.
+
+## Platform delivery (Stage 10, plan-only cloud)
+
+Kubernetes, Terraform, and CI assets are validated, never applied here:
+
+```bash
+make helm-lint        # chart lint incl. values.schema.json
+make k8s-validate     # lint + render + kubeconform strict (+ kubectl dry-run with a cluster)
+make tf-fmt           # terraform fmt check
+make tf-validate      # provider init without backend + validate (no credentials)
+```
+
+- Chart: `infrastructure/helm/ai-sre-platform/` (values mirror compose/`.env`;
+  migration hook Job; HPA for stateless frontends only; deny-all NetworkPolicy).
+- Terraform: `infrastructure/terraform/` (network, private GKE, Cloud SQL PG17
+  + pgvector, Artifact Registry, Secret Manager shells, least-privilege SAs).
+  No project/bucket/secrets committed; `terraform apply` is human-only.
+- CI: `platform.yml` (Helm/Terraform/CRITICAL-gated scans + SARIF),
+  `deploy.yml` (versioned build, SBOM/provenance, WIF push, protected `dev`
+  deploy, post-deploy smoke), `eval-live.yml` (manual, typed confirmation,
+  budget-validated). See [ADR 0012](docs/adr/0012-platform-and-ci-boundary.md)
+  and `docs/runbooks/` (`local-kubernetes`, `gcp-bootstrap`, `gcp-costs`,
+  `scan-triage`).
 
 ## Prerequisites and setup
 
@@ -594,7 +620,9 @@ recorded in [ADR 0008](docs/adr/0008-knowledge-rag-boundary.md) and the frontend
 boundary in [ADR 0009](docs/adr/0009-frontend-approval-boundary.md). Eval scenarios and
 grading are [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md), and the
 remediation execution boundary is
-[ADR 0011](docs/adr/0011-remediation-execution-boundary.md). The next planned
-milestone is **implementation-plan Stage 10 / Kubernetes, Helm, Terraform,
-CI/CD**; cloud deployment and production auto-remediation are deliberately
-not started here.
+[ADR 0011](docs/adr/0011-remediation-execution-boundary.md), and the local
+Kubernetes / GCP plan / CI boundary is
+[ADR 0012](docs/adr/0012-platform-and-ci-boundary.md). The next planned
+milestone is **implementation-plan Stage 11 / final hardening**; cloud
+deployment beyond the dev plan and production auto-remediation are
+deliberately not started here.

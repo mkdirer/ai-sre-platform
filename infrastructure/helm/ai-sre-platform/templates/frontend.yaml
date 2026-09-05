@@ -1,0 +1,107 @@
+{{- if .Values.frontend.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "frontend" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  # NodePort only for kind/Minikube without a LoadBalancer. Production
+  # would use Ingress + TLS instead; see docs/runbooks/gcp-bootstrap.md.
+  type: {{ .Values.frontend.serviceType }}
+  {{- if eq .Values.frontend.serviceType "NodePort" }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: {{ .Values.frontend.nodePort }}
+  {{- else }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+  {{- end }}
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "frontend" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "frontend" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  replicas: 1 # Static bundle; scale only behind shared cache/CDN.
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "frontend" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "frontend" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      # NOTE: nginx master starts as root (bind :80, cache setup) then
+      # drops to the nginx user — same exception as compose documents.
+      # No runAsNonRoot here; capabilities are still dropped.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          image: {{ include "ai-sre.frontendImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.frontendImage.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          # Upstream nginx writes cache/pid/temp files at runtime; these
+          # emptyDirs are what allow readOnlyRootFilesystem below (same
+          # exception compose documents for the nginx startup path).
+          volumeMounts:
+            - name: cache
+              mountPath: /var/cache/nginx
+            - name: run
+              mountPath: /var/run
+            - name: tmp
+              mountPath: /tmp
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.frontendResources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - CHOWN
+                - DAC_OVERRIDE
+                - NET_BIND_SERVICE
+                - SETGID
+                - SETUID
+            seccompProfile:
+              type: RuntimeDefault
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

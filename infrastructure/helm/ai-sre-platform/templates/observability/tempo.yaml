@@ -1,0 +1,118 @@
+{{- if .Values.observability.tempo.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-tempo-config
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+data:
+  tempo.yaml: |
+    server: { http_listen_port: 3200 }
+    distributor: { receivers: { otlp: { protocols: { grpc: {}, http: {} } } } }
+    storage:
+      trace:
+        backend: local
+        local: { path: /var/tempo/blocks }
+        wal: { path: /var/tempo/wal }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "tempo" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 3200
+      targetPort: 3200
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "tempo" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "tempo" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  replicas: 1 # Monolithic demo mode.
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "tempo" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "tempo" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tempo
+          image: {{ .Values.observability.tempo.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args: ["-config.file=/etc/tempo/tempo.yaml"]
+          ports:
+            - name: http
+              containerPort: 3200
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo/tempo.yaml
+              subPath: tempo.yaml
+            - name: data
+              mountPath: /var/tempo
+          livenessProbe:
+            httpGet: { path: /ready, port: 3200 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /ready, port: 3200 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Data writes require a writable fs here (accepted local-demo risk;
+# see docs/runbooks/scan-triage.md).
+            readOnlyRootFilesystem: false # WAL/blocks writes.
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ai-sre.fullname" . }}-tempo-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-sre.fullname" . }}-tempo-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-tempo-data
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.observability.tempo.storageClassName }}
+  storageClassName: {{ .Values.observability.tempo.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.observability.tempo.storageSize | quote }}
+{{- end }}

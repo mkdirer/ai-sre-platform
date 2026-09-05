@@ -1,0 +1,48 @@
+{{- if .Values.migrate.enabled }}
+# Schema migrations run as an explicit Helm hook Job — never as init
+# containers. A failed migration blocks the release instead of
+# crash-looping every app pod, and `helm status` shows the failure.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-migrate
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrate.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrate.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        {{- include "ai-sre.podSecurity" . | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "ai-sre.appImage" . | quote }}
+          imagePullPolicy: {{ .Values.global.appImage.pullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          # Writable /tmp mirrors the compose migrate service tmpfs.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          env:
+            {{- include "ai-sre.appEnv" . | nindent 12 }}
+            {{- include "ai-sre.dbEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- include "ai-sre.containerSecurity" . | nindent 12 }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

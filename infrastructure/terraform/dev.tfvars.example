@@ -1,0 +1,26 @@
+# Copy to dev.tfvars (never commit real values) and fill in:
+#
+#   terraform init \
+#     -backend-config="bucket=<STATE_BUCKET>" \
+#     -backend-config="prefix=ai-sre-platform/dev"
+#   terraform plan -var-file=dev.tfvars
+#
+# plan-only: do NOT terraform apply from a development prompt.
+
+project_id   = "REPLACE-ME"
+region       = "europe-west1"
+zone         = "europe-west1-b"
+environment  = "dev"
+
+# At least one admin CIDR is required (no open default).
+admin_cidrs = ["REPLACE-ME-WORKSTATION-CIDR/32"]
+
+# Sensitive values below come from the environment in practice:
+#   export TF_VAR_db_password=...
+# Fault token / OpenAI key versions are added OUTSIDE Terraform
+# (see docs/runbooks/gcp-bootstrap.md); do not put them here.
+db_password         = null
+
+kubernetes_namespace = "ai-sre-demo"
+github_repository    = ""
+deployer_wif_member  = ""

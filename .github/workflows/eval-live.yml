@@ -1,0 +1,104 @@
+name: Live eval (manual, budget-gated)
+
+# Paid/live-model evaluation. Manual only: the live-eval environment
+# protection gate must approve, the caller types an explicit confirmation,
+# and a positive cost budget is required. Nothing here runs on push or PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset:
+        description: "Eval dataset version"
+        required: true
+        default: v1
+        type: choice
+        options: [v1, v1-extended]
+      live_scenarios:
+        description: "Comma-separated scenario IDs (default: SCN-001 only)"
+        required: false
+        default: SCN-001
+      max_cost_usd:
+        description: "Explicit cost budget in USD (must be > 0)"
+        required: true
+        default: "0"
+      confirm:
+        description: 'Type I-APPROVE to confirm paid model spend'
+        required: true
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  live-eval:
+    name: Budget-gated live evaluation
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: live-eval
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate budget and confirmation
+        env:
+          CONFIRM_INPUT: ${{ inputs.confirm }}
+          MAX_COST_INPUT: ${{ inputs.max_cost_usd }}
+          DATASET_INPUT: ${{ inputs.dataset }}
+        run: |
+          if [ "$CONFIRM_INPUT" != "I-APPROVE" ]; then
+            echo "confirm must be exactly I-APPROVE; refusing to run" >&2
+            exit 1
+          fi
+          if ! printf '%s' "$MAX_COST_INPUT" | grep -Eq '^[0-9]+(\.[0-9]+)?$'; then
+            echo "max_cost_usd must be a number; refusing to run" >&2
+            exit 1
+          fi
+          if [ "$(printf '%s' "$MAX_COST_INPUT" | awk '{print ($1 > 0)}')" != "1" ]; then
+            echo "max_cost_usd must be > 0; refusing to run" >&2
+            exit 1
+          fi
+          echo "budget confirmed: $MAX_COST_INPUT USD on $DATASET_INPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.9"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      # Requires a reachable stack (local compose or port-forwarded dev).
+      # --dataset selects the suite; the script itself re-enforces numeric
+      # EVAL_MAX_COST_USD>0 plus both opt-in flags, independently of CI.
+      - name: Run bounded live eval
+        env:
+          MAX_COST_INPUT: ${{ inputs.max_cost_usd }}
+          LIVE_SCENARIOS_INPUT: ${{ inputs.live_scenarios }}
+          DATASET_INPUT: ${{ inputs.dataset }}
+        run: |
+          RUN_LIVE_EVALS=1 EVAL_LIVE_CONFIRM=1 \
+          EVAL_MAX_COST_USD="$MAX_COST_INPUT" \
+          EVAL_LIVE_SCENARIOS="$LIVE_SCENARIOS_INPUT" \
+          uv run python scripts/run_evals.py --mode live \
+            --dataset "$DATASET_INPUT" --output evals/results
+
+      - name: Redact and upload eval artifacts
+        if: always()
+        run: |
+          mkdir -p eval-artifacts
+          for f in evals/results/eval-*.json evals/results/eval-*.md; do
+            [ -f "$f" ] || continue
+            uv run python scripts/redact_secrets.py "$f" > "eval-artifacts/$(basename "$f")"
+          done
+
+      - name: Publish eval artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: live-eval-reports
+          path: eval-artifacts/
+          retention-days: 90

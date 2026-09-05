@@ -1,0 +1,126 @@
+{{- if .Values.observability.alertmanager.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-alertmanager-config
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+data:
+  alertmanager.yml: |
+    global: { resolve_timeout: 1m }
+    route:
+      receiver: incident-api
+      group_by: [alertname, service]
+      group_wait: 1s
+      group_interval: 2s
+      repeat_interval: 1m
+    receivers:
+      - name: incident-api
+        webhook_configs:
+          - url: http://incident-api:8000/api/v1/alerts
+            send_resolved: true
+            max_alerts: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "alertmanager" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9093
+      targetPort: 9093
+  selector:
+    {{- include "ai-sre.componentSelector" (dict "component" "alertmanager" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  labels:
+    {{- include "ai-sre.componentLabels" (dict "component" "alertmanager" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ai-sre.componentSelector" (dict "component" "alertmanager" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "ai-sre.componentSelector" (dict "component" "alertmanager" "Chart" .Chart "Release" .Release "Values" .Values) | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "ai-sre.fullname" . }}-app
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: {{ .Values.observability.alertmanager.image | quote }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports:
+            - name: http
+              containerPort: 9093
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager/alertmanager.yml
+              subPath: alertmanager.yml
+            - name: data
+              mountPath: /alertmanager
+          livenessProbe:
+            httpGet: { path: /-/healthy, port: 9093 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9093 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Data writes require a writable fs here (accepted local-demo risk;
+# see docs/runbooks/scan-triage.md).
+            readOnlyRootFilesystem: false # Notification log writes.
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "ai-sre.fullname" . }}-alertmanager-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "ai-sre.fullname" . }}-alertmanager-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ai-sre.fullname" . }}-alertmanager-data
+  labels:
+    {{- include "ai-sre.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.observability.alertmanager.storageClassName }}
+  storageClassName: {{ .Values.observability.alertmanager.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.observability.alertmanager.storageSize | quote }}
+{{- end }}
