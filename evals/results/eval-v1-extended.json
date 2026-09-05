@@ -1,6 +1,6 @@
 {
   "dataset_version": "v1-extended",
-  "git_commit": "cca54558d693e84ad1d95e1a18c68cc761bbadfd",
+  "git_commit": "5c9ce9e2b5eb339be0f2f140d46750bcfc17cc9d",
   "model_config": "fake",
   "passed_count": 12,
   "scenario_count": 12,
@@ -41,7 +41,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.01150310700177215,
+        "duration_seconds": 0.015476400003535673,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -76,7 +76,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007965274999151006,
+        "duration_seconds": 0.013137917994754389,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -111,7 +111,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007566097003291361,
+        "duration_seconds": 0.009958857001038268,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -146,7 +146,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007022174992016517,
+        "duration_seconds": 0.008346568007254973,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -181,7 +181,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.006430622001062147,
+        "duration_seconds": 0.00614037798368372,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -216,7 +216,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007657270005438477,
+        "duration_seconds": 0.011209329997655004,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -251,7 +251,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.006356872996548191,
+        "duration_seconds": 0.011226242000702769,
         "estimated_cost_usd": 0.0,
         "input_tokens": 30,
         "iterations": 1,
@@ -286,7 +286,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007406945005641319,
+        "duration_seconds": 0.007550576992798597,
         "estimated_cost_usd": 0.0,
         "input_tokens": 30,
         "iterations": 1,
@@ -321,7 +321,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.0068090900022070855,
+        "duration_seconds": 0.005822367005748674,
         "estimated_cost_usd": 0.0,
         "input_tokens": 30,
         "iterations": 1,
@@ -356,7 +356,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.00815948199306149,
+        "duration_seconds": 0.007445919996825978,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -391,7 +391,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.009876001000520773,
+        "duration_seconds": 0.008976117009297013,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -426,7 +426,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.009527930000331253,
+        "duration_seconds": 0.007901253004092723,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -451,8 +451,8 @@
     "false_root_cause_rate": 0.0,
     "insufficient_precision": 1.0,
     "insufficient_recall": 1.0,
-    "median_duration_seconds": 0.007657270005438477,
-    "p95_duration_seconds": 0.01150310700177215,
+    "median_duration_seconds": 0.008976117009297013,
+    "p95_duration_seconds": 0.015476400003535673,
     "passed_count": 12,
     "recommendation_safety_rate": 1.0,
     "root_cause_accuracy": 1.0,
@@ -465,5 +465,5 @@
     "total_input_tokens": 540,
     "total_output_tokens": 540
   },
-  "timestamp": "2026-09-04T17:42:46.151398+00:00"
+  "timestamp": "2026-09-05T12:54:48.979289+00:00"
 }

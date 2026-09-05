@@ -136,14 +136,17 @@ ai-sre-platform/
 │   ├── investigator_worker/
 │   └── frontend/
 ├── packages/
-│   ├── agents/
-│   ├── tools/
-│   ├── rag/
-│   ├── models/
-│   ├── incidents/
-│   ├── persistence/
-│   ├── task_queue/
-│   └── telemetry/
+│   ├── agents/          # LangGraph investigator, model gateway, validation
+│   ├── config/          # shared typed settings
+│   ├── evals/           # scenario schema, grader, fixtures, runners
+│   ├── incidents/       # normalization, scoping, collection, timeline
+│   ├── models/          # strict transport/domain contracts
+│   ├── persistence/     # SQLAlchemy stores
+│   ├── rag/             # chunking, embeddings, knowledge retrieval
+│   ├── remediation/     # action registry, rollback adapter, execution
+│   ├── task_queue/      # Celery factory, publisher, Redis readiness
+│   ├── telemetry/       # OTel lifecycle, logging, metrics
+│   └── tools/           # read-only Prometheus/Loki/Tempo/deployment adapters
 ├── observability/
 │   ├── prometheus/
 │   ├── alertmanager/
@@ -197,7 +200,7 @@ services
   → OTLP traces/logs → OpenTelemetry Collector → Tempo/Loki
   → /metrics         → Prometheus
 
-current Stage 05 path:
+deterministic collection path (repo Stage 05, always runs):
 Prometheus → Alertmanager → Incident API → PostgreSQL
                                       └→ Redis/Celery → Investigator Worker
                                                             ├→ Prometheus
@@ -207,9 +210,9 @@ Prometheus → Alertmanager → Incident API → PostgreSQL
                                                                    ↓
                                                          canonical evidence → PostgreSQL
 
-later path:
+investigator path (repo Stage 06+, opt-in via INVESTIGATOR_ENABLED):
 Investigator Worker
-  → existing allowlisted evidence adapters + later knowledge adapter
+  → existing allowlisted evidence adapters + knowledge adapter (repo Stage 07)
   → LangGraph workflow
   → structured IncidentReport → PostgreSQL
 
@@ -269,7 +272,7 @@ incident pause in `waiting_for_approval` persists); rejection moves the incident
 
 ### LangGraph workflow
 
-Planned Stage 4 baseline graph:
+Implemented Stage 4 baseline graph (repo Stage 06):
 
 ```text
 START

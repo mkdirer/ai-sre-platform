@@ -21,6 +21,8 @@ Usage:
 import argparse
 import asyncio
 import json
+import os
+import shlex
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
@@ -62,9 +64,10 @@ from packages.tools.loki import LokiAdapter, LokiClient
 from packages.tools.prometheus import PrometheusAdapter, PrometheusClient
 from packages.tools.tempo import TempoAdapter, TempoClient
 
-PAYMENT = "http://127.0.0.1:8004"
-GATEWAY = "http://127.0.0.1:8001"
-INCIDENT_API = "http://127.0.0.1:8006"
+PAYMENT = os.environ.get("SCENARIO_PAYMENT_URL", "http://127.0.0.1:8004")
+GATEWAY = os.environ.get("SCENARIO_GATEWAY_URL", "http://127.0.0.1:8001")
+INCIDENT_API = os.environ.get("SCENARIO_INCIDENT_API_URL", "http://127.0.0.1:8006")
+COMPOSE = shlex.split(os.environ.get("COMPOSE") or "docker compose")
 BAD_VERSION = "0.2.0"
 GOOD_VERSION = "0.1.0"
 
@@ -128,7 +131,7 @@ async def _already_collected(claim: WorkerClaim) -> tuple[object, ...]:
 
 def _compose(*args: str) -> None:
     subprocess.run(
-        ["docker", "compose", *args],
+        [*COMPOSE, *args],
         check=False,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -170,7 +173,13 @@ async def main() -> int:
             deadline = time.perf_counter() + 60.0
             while time.perf_counter() < deadline:
                 exited = subprocess.run(
-                    ["docker", "compose", "ps", "--format", "{{.Status}}", "investigator-worker"],
+                    [
+                        *COMPOSE,
+                        "ps",
+                        "--format",
+                        "{{.Status}}",
+                        "investigator-worker",
+                    ],
                     check=False,
                     capture_output=True,
                     text=True,
@@ -262,9 +271,25 @@ async def main() -> int:
                 raise RuntimeError("no investigation job for incident")
             job_id = UUID(str(items[0]["id"]))
 
-            claim = await incident_store.claim_job(job_id, incident_id)
-            if not claim.claimed:
-                raise RuntimeError(f"script could not claim the evidence job: {claim.reason}")
+            claim = None
+            claim_deadline = time.perf_counter() + 30.0
+            claim_reason = "not attempted"
+            while time.perf_counter() < claim_deadline:
+                candidate = await incident_store.claim_job(job_id, incident_id)
+                if candidate.claimed:
+                    claim = candidate
+                    break
+                # Terminal states can never become claimable; only a live
+                # lease (worker still draining after stop) is worth retrying.
+                if candidate.reason in ("terminal", "incident_terminal", "incident_not_claimable"):
+                    claim_reason = candidate.reason
+                    break
+                claim_reason = candidate.reason
+                await asyncio.sleep(2.0)
+            if claim is None:
+                raise RuntimeError(
+                    f"script could not claim the evidence job within 30s: {claim_reason}"
+                )
             telemetry = TelemetryRuntime.create(service_name="scenario", settings=settings)
             collector = EvidenceCollectionService(
                 store=evidence_store,

@@ -26,12 +26,14 @@ def test_bearer_and_assignments_are_masked() -> None:
         "Authorization: Bearer s3cr3t\n"
         "FAULT_CONTROL_TOKEN=local-demo-fault-control\n"
         'postgres_password = "change-me"\n'
+        "authorization=bare-secret\n"
     )
     assert "s3cr3t" not in out
     assert "local-demo-fault-control" not in out
     assert "change-me" not in out
-    assert out.count("[REDACTED]") == 3
-    assert "Authorization: Bearer" in out
+    assert "bare-secret" not in out
+    assert out.count("[REDACTED]") == 5
+    assert "Authorization:" in out
     assert "FAULT_CONTROL_TOKEN=" in out
 
 
@@ -60,6 +62,14 @@ def test_password_containing_at_sign_is_fully_masked() -> None:
     out = _redact("db=postgres://aisre:p@ss@db:5432/aisre ok\n")
     assert "p@ss" not in out
     assert "postgres://aisre:[REDACTED]@db:5432/aisre ok" in out
+
+
+def test_password_containing_slash_is_fully_masked() -> None:
+    """Generated passwords with '/' (e.g. base64) must not leak the suffix."""
+
+    out = _redact("db=postgres://u:p/a@ss@h/db ok\n")
+    assert "p/a@ss" not in out
+    assert "postgres://u:[REDACTED]@h/db ok" in out
 
 
 def test_benign_eval_and_report_text_passes_through() -> None:

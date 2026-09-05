@@ -4,6 +4,13 @@
 
 Implement one numbered prompt at a time. Each stage ends with a working vertical slice, tests, updated documentation, and a Git checkpoint. Do not start AI/RAG until Milestone 1 is fully accepted.
 
+Stage numbering uses two axes: the implementation-plan stage (this file) and the
+repository stage (commit-sized milestones; Milestones 1A–1C, then repo Stages
+04–11). They are off by a slowly growing offset — e.g. repo Stage 10 implements
+plan Stage 9 (remediation), and repo Stage 11 implements plan Stage 10
+(platform/CI). When a document says only “Stage N”, the surrounding context
+(attribute it to plan vs repository) disambiguates; new text should name both.
+
 ## Stage 0 — repository bootstrap
 
 Goal: reproducible repository skeleton and developer workflow.

@@ -20,22 +20,34 @@ _SECRET_KEYS = frozenset(
     {
         "apikey",
         "authorization",
+        "clientsecret",
         "cookie",
         "credential",
+        "dbpassword",
         "idempotencykey",
         "password",
         "passwd",
         "privatekey",
         "proxyauthorization",
+        "pwd",
         "secret",
         "setcookie",
         "token",
     }
 )
 _BEARER_PATTERN = re.compile(r"(?i)\bBearer\s+[^\s,;]+")
+# Key coverage intentionally overlaps scripts/redact_secrets.py (pwd,
+# client-secret, quoted JSON keys) but the two are not identical by design:
+# hot-path logs bound values at ,/; and normalize the separator to =, while
+# the CI script preserves separators and consumes wider values. Keep both
+# green via tests/unit/test_telemetry.py and tests/unit/test_redact_secrets.py
+# rather than sharing a pattern across the service/CI boundary.
 _ASSIGNMENT_PATTERN = re.compile(
-    r"(?i)\b(authorization|password|passwd|secret|token|api[-_.]?key)\s*[:=]\s*[^\s,;]+"
+    r"(?i)"
+    r'("?)\b([A-Za-z_]*(?:authorization|password|passwd|pwd|token|api[-_.]?key|secret|client[-_.]?secret))\b("?)'
+    r'(\s*[:=]\s*)("[^"]*"|\'[^\']*\'|[^\s,;]+)'
 )
+_URL_CREDENTIALS_PATTERN = re.compile(r"(://[^:/\s]+:)[^\s]*(@)")
 
 
 def _normalized_key(key: str) -> str:
@@ -46,7 +58,10 @@ def redact_text(value: str) -> str:
     """Redact common credential forms and bound untrusted string length."""
 
     redacted = _BEARER_PATTERN.sub("Bearer [REDACTED]", value)
-    redacted = _ASSIGNMENT_PATTERN.sub(lambda match: f"{match.group(1)}=[REDACTED]", redacted)
+    redacted = _ASSIGNMENT_PATTERN.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}{match.group(3)}=[REDACTED]", redacted
+    )
+    redacted = _URL_CREDENTIALS_PATTERN.sub(r"\1[REDACTED]\2", redacted)
     if len(redacted) > _MAX_STRING_LENGTH:
         return f"{redacted[:_MAX_STRING_LENGTH]}…"
     return redacted

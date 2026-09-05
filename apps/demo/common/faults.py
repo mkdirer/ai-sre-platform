@@ -218,14 +218,21 @@ class MultiFaultController:
             return self._enabled[fault]
 
     async def inject_delay(self, fault: FaultName) -> None:
-        """Apply the bounded simulated delay for delay-type faults when enabled."""
+        """Apply the bounded simulated delay for delay-type faults when enabled.
+
+        The span annotation fires only for an actually injected fault: every
+        request calls inject_delay for each delay-type fault in order, so an
+        unconditional annotation here would overwrite another controller's
+        (or this controller's enabled fault's) attributes with
+        enabled=False — exactly what hid slow_database from Tempo proofs.
+        """
 
         state = self.state(fault)
-        self._annotate_current_span(state)
         if not state.enabled:
             return
         if fault == FaultName.HIGH_ERROR_RATE:
             return
+        self._annotate_current_span(state)
         self._telemetry.logger.warning(
             _log_event(fault),
             extra={

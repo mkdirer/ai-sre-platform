@@ -1,7 +1,7 @@
 # Eval report (v1)
 
-- timestamp: 2026-09-04T17:42:41.594398+00:00
-- git_commit: cca54558d693e84ad1d95e1a18c68cc761bbadfd
+- timestamp: 2026-09-05T12:54:45.416211+00:00
+- git_commit: 5c9ce9e2b5eb339be0f2f140d46750bcfc17cc9d
 - model_config: fake
 - scenarios: 7, passed: 7
 - root_cause_accuracy: 1.000
@@ -14,8 +14,8 @@
 - insufficient_precision: 1.000
 - insufficient_recall: 1.000
 - recommendation_safety_rate: 1.000
-- median_duration_seconds: 0.009
-- p95_duration_seconds: 0.012
+- median_duration_seconds: 0.020
+- p95_duration_seconds: 0.040
 - avg_tool_calls: 4.00
 - avg_iterations: 1.00
 - total_estimated_cost_usd: 0.0000

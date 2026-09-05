@@ -141,12 +141,18 @@ class SlowDatabaseFaultController:
         return state
 
     async def inject_before_database(self) -> None:
-        """Apply a fixed delay immediately before persistence when enabled."""
+        """Apply a fixed delay immediately before persistence when enabled.
+
+        The span annotation fires only when the fault is actually injected,
+        mirroring MultiFaultController.inject_delay: an unconditional
+        annotation here would overwrite another controller's enabled-fault
+        attributes with enabled=False on the same span.
+        """
 
         state = self.state()
-        self._annotate_current_span(state)
         if not state.enabled:
             return
+        self._annotate_current_span(state)
 
         self._telemetry.logger.warning(
             "fault.slow_database.injected",

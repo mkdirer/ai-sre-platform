@@ -15,7 +15,7 @@ Before finishing any prompt:
 ## Full Python gate
 
 ```bash
-uv sync --all-groups
+uv sync --all-groups --locked
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy apps packages

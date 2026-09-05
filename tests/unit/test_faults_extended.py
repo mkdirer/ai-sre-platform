@@ -381,3 +381,44 @@ def test_unowned_fault_raises_clear_error() -> None:
         controller.state(FaultName.INVENTORY_TIMEOUT)
     with pytest.raises(ValueError, match="not owned"):
         controller.is_enabled(FaultName.INVENTORY_TIMEOUT)
+
+
+class _RecordingSpan:
+    """OTel span double capturing set_attribute calls for annotation tests."""
+
+    def __init__(self) -> None:
+        self.attributes: dict[str, object] = {}
+
+    def set_attribute(self, key: str, value: object) -> None:
+        self.attributes[key] = value
+
+
+@pytest.mark.asyncio
+async def test_disabled_inject_delay_never_clobbers_span_annotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: disabled faults must not overwrite span fault attributes.
+
+    Production payment calls inject_delay for every delay-type fault in
+    order; a trailing disabled cpu_saturation call used to overwrite the
+    slow_database annotation with enabled=False, hiding the fault from the
+    fault-enriched Tempo proof in scenario_slow_database.
+    """
+
+    async def _no_sleep(_delay: float) -> None:
+        return None
+
+    controller = _payment_controller(_settings(), sleeper=_no_sleep)
+    span = _RecordingSpan()
+    monkeypatch.setattr("apps.demo.common.faults.trace.get_current_span", lambda: span)
+
+    await controller.inject_delay(FaultName.POOL_EXHAUSTION)
+    await controller.inject_delay(FaultName.CPU_SATURATION)
+    assert span.attributes == {}
+
+    controller.set_enabled(FaultName.POOL_EXHAUSTION, True)
+    span.attributes.clear()
+    await controller.inject_delay(FaultName.POOL_EXHAUSTION)
+    await controller.inject_delay(FaultName.CPU_SATURATION)
+    assert span.attributes["fault.name"] == FaultName.POOL_EXHAUSTION.value
+    assert span.attributes["fault.enabled"] is True

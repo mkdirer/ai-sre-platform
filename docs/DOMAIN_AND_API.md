@@ -186,7 +186,8 @@ still be corroborated by current telemetry evidence IDs.
 - `GET /api/v1/investigation-jobs?incident_id=...&status=dead_lettered&limit=25&offset=0` —
   operational queue, publish-failure, retry, and dead-letter visibility.
 - `GET /api/v1/knowledge/search?q=...&doc_type=runbook&top_k=8` — bounded cosine retrieval
-  over versioned historical context, with `KNW-` chunk citations kept distinct from current
+  over versioned historical context (`top_k` default 8, effective max 20 via
+  `KNOWLEDGE_MAX_TOP_K`; the API accepts up to 50 and clamps), with `KNW-` chunk citations kept distinct from current
   `EVD-` evidence. Returns 503 when knowledge search is not configured.
 - `GET /health/live`, `GET /health/ready`, `GET /metrics`; the worker's process-owned Prometheus
   registry is available separately on loopback port 9464 and is scraped internally.

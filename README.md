@@ -1,8 +1,8 @@
 # AI SRE Incident Investigation Platform
 
 This repository is being built into an evidence-grounded incident investigation platform. The
-current vertical slice is **Stage 10 / implementation-plan Stage 9 plus validated delivery
-assets**: Milestone 1 and the Stage 05 deterministic evidence run remain working, an opt-in
+current vertical slice is **implementation-plan Stages 9–10 (repository Stages 10–11)**:
+Milestone 1 and the Stage 05 deterministic evidence run remain working, an opt-in
 LangGraph investigator turns canonical evidence into a schema-validated report with
 deterministic grounding, versioned knowledge retrieval provides supporting historical context
 with pgvector, a small React frontend reviews incidents and records human approve/reject
@@ -94,7 +94,7 @@ Implemented now:
   actionable 409s; approval records the decision and resumes state without executing
   remediation).
 
-Approved remediation (Stage 10) executes one allowlisted action after explicit
+Approved remediation (repo Stage 10 / plan Stage 9) executes one allowlisted action after explicit
 approval: `POST /api/v1/recommendations/{id}/execute` claims a
 `rollback_payment_deployment` execution (version-checked, replay-safe,
 concurrency-serialized) and enqueues the worker; the adapter disables the
@@ -107,7 +107,7 @@ Kubernetes manifests, Terraform plans, and CI pipelines exist as validated,
 never-applied delivery assets (see below). The Stage 03 receiver remains available only in the `test-tools`
 Compose profile and its contract test; Alertmanager no longer targets it.
 
-## Reproducible evals (Stage 09)
+## Reproducible evals (repo Stage 09 / plan Stage 8)
 
 Twelve versioned scenarios live in `evals/scenarios/*.json` (`v1` core SCN-001..007,
 `v1-extended` adds SCN-008..012 edge fixtures). Faults are allowlisted, bounded, reversible,
@@ -138,7 +138,7 @@ checkouts per scenario, and always attempts fault cleanup. Paid model evals are 
 without explicit approval. See [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md)
 and `evals/datasets/v1/README.md`.
 
-## Platform delivery (Stage 10, plan-only cloud)
+## Platform delivery (repo Stage 11 / plan Stage 10, plan-only cloud)
 
 Kubernetes, Terraform, and CI assets are validated, never applied here:
 
@@ -158,8 +158,8 @@ make tf-validate      # provider init without backend + validate (no credentials
   `deploy.yml` (versioned build, SBOM/provenance, WIF push, protected `dev`
   deploy, post-deploy smoke), `eval-live.yml` (manual, typed confirmation,
   budget-validated). See [ADR 0012](docs/adr/0012-platform-and-ci-boundary.md)
-  and `docs/runbooks/` (`local-kubernetes`, `gcp-bootstrap`, `gcp-costs`,
-  `scan-triage`).
+   and `docs/runbooks/` (`local-kubernetes`, `gcp-bootstrap`, `gcp-costs`,
+   `scan-triage`, `troubleshooting`).
 
 ## Prerequisites and setup
 
@@ -186,6 +186,18 @@ that context. `.env` is ignored, and secret-valued settings use `SecretStr` so n
 representations do not disclose them.
 
 ## Start, migrate, and stop
+
+The one-command portfolio entry point resets to a clean state, rebuilds, starts
+everything, polls readiness, and shows service health:
+
+```bash
+make demo
+```
+
+It is equivalent to `docker compose down --volumes --remove-orphans`, then build,
+start, and deadline-polled readiness (see `scripts/wait_for_ready.py` — no fixed
+sleeps anywhere in the demo path). Follow it with `make scenario-remediation`
+for the full bad-deployment incident story.
 
 Build the application image, start PostgreSQL and Redis, apply migrations, and start the four demo
 services, Incident API, Celery worker, and local observability/alert stack:
@@ -429,7 +441,7 @@ is in `development` or `test`, `FAULT_INJECTION_ALLOWED=true`, and the
 publishes payment on loopback, and uses the documented local placeholder token. The token is
 secret-safe in settings and is never printed by the runner.
 
-Run the complete bounded Stage 05 scenario:
+Run the complete bounded slow-database scenario:
 
 ```bash
 make scenario-incident-pipeline
@@ -477,7 +489,10 @@ curl --fail-with-body --request PUT \
 
 ## Frontend review UI
 
-Start the stack (`make compose-up`), then open `http://127.0.0.1:5173` (`FRONTEND_PORT`).
+Start the stack (`make demo` from clean, or `make compose-up` to keep data), then open `http://127.0.0.1:5173` (`FRONTEND_PORT`).
+The browser calls the API under the same origin at `/api/...` (note the prefix,
+no trailing-slash alias: call `/api/v1/incidents`, not `/api`). Nginx proxies
+that prefix to Incident API; `/health/live` is answered statically by nginx.
 The list shows severity, service, status, timestamps, and a confidence/data-gap
 indicator per incident. The detail view shows the RCA (or an explicit
 insufficient-evidence state), data gaps, recommendations with risk, competing
@@ -509,7 +524,7 @@ npm --prefix apps/frontend run dev
 
 Screenshots are not committed; capture them deterministically from a local run:
 
-1. `make compose-up`, wait for healthy services, run `make scenario-incident-pipeline`.
+1. `make demo`, then run `make scenario-incident-pipeline`.
 2. Open `http://127.0.0.1:5173` at 1440×900 and capture the incident list.
 3. Open a `waiting_for_approval` incident and capture the detail top (RCA +
    recommendations), then the evidence and timeline sections.
@@ -529,11 +544,11 @@ Screenshots are not committed; capture them deterministically from a local run:
 | `make test` | Run deterministic tests that need no live services. |
 | `make test-integration` | Run clean-migration/store, live checkout, and bounded four-source evidence tests. |
 | `make compose-validate` | Validate the resolved Compose model. |
-| `make check` | Run the deterministic Stage 05 quality gate (live integration remains separate). |
+| `make check` | Run the deterministic quality gate: unit, contract, agent, and offline-eval tests (live integration remains separate). |
 | `make compose-logs` | Print uncolored service/migration/PostgreSQL logs. |
 | `make smoke-observability` | Prove metric, log, and trace correlation through backend APIs. |
 | `make scenario-incident-pipeline` | Prove fault→alert→durable incident→worker→recovery. |
-| `make scenario-remediation` | Prove approval→rollback→telemetry recovery→resolved (~60s). |
+| `make scenario-remediation` | Prove approval→rollback→telemetry recovery→resolved (bounded; per-step timings printed). |
 | `make eval-fake` | Run the 7-scenario offline eval suite and write `evals/results/`. |
 | `make eval-extended` | Run the 12-scenario extended offline eval suite. |
 | `make test-eval` | Run eval schema/grader/fault unit tests plus the fake suite. |
@@ -543,8 +558,12 @@ Screenshots are not committed; capture them deterministically from a local run:
 | `make scenario-slow-database` | Compatibility alias for `scenario-incident-pipeline`. |
 | `make milestone1-smoke` | Re-run the full checkout, observability, and controlled-fault gate. |
 | `make milestone2-smoke` | Run checkout, observability, and durable incident E2E. |
-| `make frontend-install` / `frontend-lint` / `frontend-typecheck` / `frontend-test` / `frontend-build` | Node gates for the review UI (install, ESLint, `tsc --noEmit`, Vitest, production build). |
+| `make frontend-install` / `make frontend-lint` / `make frontend-typecheck` / `make frontend-test` / `make frontend-build` | Node gates for the review UI (install, ESLint, `tsc --noEmit`, Vitest, production build). |
 | `make frontend-e2e` | Playwright review-and-approve browser spec (route-fulfilled by default; live with `FRONTEND_E2E_URL` + `FRONTEND_E2E_LIVE=1`). |
+| `make demo` | Reset to a clean state, rebuild, start the full stack, poll readiness, show health. |
+| `make ingest-knowledge` / `make ingest-knowledge-dry-run` | Ingest versioned Markdown knowledge (or preview the plan). |
+| `make helm-lint` / `make helm-template` / `make k8s-validate` | Chart lint, render, and strict manifest validation (needs helm/kubeconform; honest SKIP otherwise). |
+| `make tf-fmt` / `make tf-validate` | Terraform format check and offline validation (needs terraform; plan-only, never apply). |
 
 Run integration tests only after `docker compose ps` reports the runtime services healthy:
 
@@ -581,15 +600,23 @@ apps/demo/                  # four business services plus optional receiver test
 apps/frontend/              # React + TypeScript + Vite review UI (list/detail/approval)
 apps/incident_api/          # durable Alertmanager ingestion and typed reads
 apps/investigator_worker/   # Celery deterministic evidence collection entrypoint
+packages/agents/         # LangGraph investigator, model gateway, validation, evidence tools
 packages/config/            # shared typed settings
 packages/evals/             # versioned scenario schema, grader, fixtures, runners
 packages/incidents/         # normalization, scoping, collection, timeline, worker service
 packages/models/            # strict transport/domain contracts
 packages/persistence/       # SQLAlchemy payment/incident/evidence/deployment stores
+packages/rag/               # Markdown chunking, embeddings, knowledge retrieval
+packages/remediation/       # closed action registry, rollback adapter, execution service
 packages/task_queue/        # Celery configuration, publisher, Redis readiness
 packages/telemetry/         # OTel lifecycle, W3C context, JSON logs, and RED metrics
+packages/tools/             # read-only Prometheus/Loki/Tempo/deployment adapters
 migrations/                 # Alembic environment and versioned schema
 infrastructure/docker/      # reusable application image and PostgreSQL init asset
+infrastructure/helm/        # local-cluster chart (plan Stage 10, validated only)
+infrastructure/terraform/   # GCP plan-only modules (plan Stage 10, never applied here)
+knowledge/                  # versioned seed documents for RAG
+prompts/                    # one-prompt-per-stage build plan (00 scope, 12 hardening)
 observability/              # Collector, Prometheus/rules, Alertmanager, Loki, Tempo, Grafana
 evals/scenarios/            # versioned machine-readable fault scenarios (v1 + v1-extended)
 evals/datasets/             # dataset manifests and human explanations
@@ -622,7 +649,7 @@ grading are [ADR 0010](docs/adr/0010-eval-scenarios-and-grading-boundary.md), an
 remediation execution boundary is
 [ADR 0011](docs/adr/0011-remediation-execution-boundary.md), and the local
 Kubernetes / GCP plan / CI boundary is
-[ADR 0012](docs/adr/0012-platform-and-ci-boundary.md). The next planned
-milestone is **implementation-plan Stage 11 / final hardening**; cloud
-deployment beyond the dev plan and production auto-remediation are
+[ADR 0012](docs/adr/0012-platform-and-ci-boundary.md). Release hardening is
+tracked in `prompts/12_FINAL_HARDENING.md` (implementation-plan Stage 11).
+Cloud deployment beyond the dev plan and production auto-remediation are
 deliberately not started here.

@@ -20,6 +20,8 @@ from packages.telemetry import (
     bind_request_id,
     extract_trace_context,
     inject_trace_context,
+    redact_text,
+    redact_value,
     reset_request_id,
 )
 from packages.telemetry.metrics import HttpMetrics, normalized_method, normalized_route
@@ -100,6 +102,33 @@ def test_json_log_enrichment_and_recursive_redaction() -> None:
     assert payload["span_id"] == "1234567890abcdef"
     assert payload["request_id"] == "request-123"
     assert payload["attributes"]["nested"]["safe"] == "visible"
+
+
+def test_hot_path_redaction_covers_compound_keys_json_and_urls() -> None:
+    """Regression: client_secret/db_password/pwd, quoted JSON keys, and URL userinfo."""
+
+    assert redact_value({"client_secret": "hunter2"}) == {"client_secret": "[REDACTED]"}
+    assert redact_value({"nested": {"db_password": "x", "safe": "visible"}}) == {
+        "nested": {"db_password": "[REDACTED]", "safe": "visible"}
+    }
+    assert redact_value({"pwd": "hunter2"}) == {"pwd": "[REDACTED]"}
+
+    out = redact_text('{"db_password": "change-me", "token": "s3cr3t", "ok": true}')
+    assert "change-me" not in out
+    assert "s3cr3t" not in out
+    assert '"ok": true' in out
+
+    out = redact_text("db=postgres://aisre:p@ss@db:5432/aisre ok")
+    assert "p@ss" not in out
+    assert "postgres://aisre:[REDACTED]@db:5432/aisre ok" in out
+
+    out = redact_text("db=postgres://u:p/a@ss@h/db ok")
+    assert "p/a@ss" not in out
+    assert "postgres://u:[REDACTED]@h/db ok" in out
+
+    assert redact_text("pwd=hunter2") == "pwd=[REDACTED]"
+    benign = "benign eval text | SCN-001 | true |"
+    assert redact_text(benign) == benign
 
 
 def test_metric_labels_and_route_policy_are_bounded() -> None:

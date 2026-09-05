@@ -1,6 +1,6 @@
 {
   "dataset_version": "v1",
-  "git_commit": "cca54558d693e84ad1d95e1a18c68cc761bbadfd",
+  "git_commit": "5c9ce9e2b5eb339be0f2f140d46750bcfc17cc9d",
   "model_config": "fake",
   "passed_count": 7,
   "scenario_count": 7,
@@ -36,7 +36,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.012031944002956152,
+        "duration_seconds": 0.04042693501105532,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -71,7 +71,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.00972465900122188,
+        "duration_seconds": 0.03076159898773767,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -106,7 +106,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.00864228700811509,
+        "duration_seconds": 0.029306860989890993,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -141,7 +141,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.007841839993488975,
+        "duration_seconds": 0.0190892509999685,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -176,7 +176,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.009326694998890162,
+        "duration_seconds": 0.017521369009045884,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -211,7 +211,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.0077249379974091426,
+        "duration_seconds": 0.01981378998607397,
         "estimated_cost_usd": 0.0,
         "input_tokens": 50,
         "iterations": 1,
@@ -246,7 +246,7 @@
         "unsupported_claims": 0
       },
       "metadata": {
-        "duration_seconds": 0.009113931999308988,
+        "duration_seconds": 0.012758336990373209,
         "estimated_cost_usd": 0.0,
         "input_tokens": 30,
         "iterations": 1,
@@ -271,8 +271,8 @@
     "false_root_cause_rate": 0.0,
     "insufficient_precision": 1.0,
     "insufficient_recall": 1.0,
-    "median_duration_seconds": 0.009113931999308988,
-    "p95_duration_seconds": 0.012031944002956152,
+    "median_duration_seconds": 0.01981378998607397,
+    "p95_duration_seconds": 0.04042693501105532,
     "passed_count": 7,
     "recommendation_safety_rate": 1.0,
     "root_cause_accuracy": 1.0,
@@ -285,5 +285,5 @@
     "total_input_tokens": 330,
     "total_output_tokens": 330
   },
-  "timestamp": "2026-09-04T17:42:41.594398+00:00"
+  "timestamp": "2026-09-05T12:54:45.416211+00:00"
 }

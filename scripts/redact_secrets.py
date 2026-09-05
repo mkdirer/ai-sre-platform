@@ -17,20 +17,24 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9\-._~+/=]+"), r"\1 [REDACTED]"),
     # password=... / "token": "..." / api-key: ... (quoted or bare keys and
     # values), including SNAKE_CASE env names such as FAULT_CONTROL_TOKEN
-    # and JSON object keys such as {"db_password": "change-me"}.
+    # and JSON object keys such as {"db_password": "change-me"}. Deliberately
+    # overlaps packages/telemetry/logging.py without sharing the pattern: the
+    # hot path bounds values and normalizes separators, this script preserves
+    # artifact text verbatim apart from secrets.
     (
         re.compile(
             r"""(?ix)
-            ("?)\b([A-Za-z_]*(?:password|passwd|pwd|token|api[-_]?key|secret|client[-_]?secret))\b("?)
+            ("?)\b([A-Za-z_]*(?:authorization|password|passwd|pwd|token|api[-_]?key|secret|client[-_]?secret))\b("?)
             (\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)
             """
         ),
         r"\1\2\3\4[REDACTED]",
     ),
     # scheme://user:password@host credentials in URLs. The userinfo match is
-    # greedy up to the last "@" before "/" or whitespace so generated
-    # passwords containing "@" are fully masked.
-    (re.compile(r"(://[^:/\s]+:)[^/\s]*(@)"), r"\1[REDACTED]\2"),
+    # greedy up to the last "@" before whitespace so generated passwords
+    # containing "@" or "/" are fully masked (over-masking a malformed line
+    # is safer than leaking a secret).
+    (re.compile(r"(://[^:/\s]+:)[^\s]*(@)"), r"\1[REDACTED]\2"),
 )
 
 

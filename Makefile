@@ -14,7 +14,7 @@ LIVE_DATABASE_URL ?= postgresql+asyncpg://aisre:change-me@127.0.0.1:5432/aisre
 FAULT_CONTROL_TOKEN ?= local-demo-fault-control
 
 .PHONY: setup sync format format-check lint typecheck test-unit test-contract test \
-	test-integration test-eval migrate compose-up compose-down compose-logs smoke smoke-observability \
+	test-integration test-eval migrate compose-up demo compose-down compose-logs smoke smoke-observability \
 	scenario-slow-database scenario-incident-pipeline scenario-remediation milestone1-smoke milestone2-smoke \
 	demo-investigation-report smoke-investigator-live ingest-knowledge ingest-knowledge-dry-run \
 	eval-fake eval-extended eval-live \
@@ -68,6 +68,15 @@ migrate:
 
 compose-up:
 	$(COMPOSE) up --build -d
+
+# Portfolio demo entry point: reset to a clean state, start everything with a
+# fresh build, then poll readiness (no fixed sleeps) and show service health.
+# Follow with `make scenario-remediation` for the full incident story.
+demo:
+	$(COMPOSE) down --volumes --remove-orphans
+	$(COMPOSE) up --build -d
+	$(UV) run python scripts/wait_for_ready.py
+	$(COMPOSE) ps
 
 compose-down:
 	$(COMPOSE) down
