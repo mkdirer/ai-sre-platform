@@ -80,4 +80,43 @@ describe("IncidentListPage", () => {
     );
     expect(await screen.findByText("data gaps")).toBeInTheDocument();
   });
+
+  it("shows an overview strip derived from loaded incidents", async () => {
+    listMock.mockResolvedValue(page());
+    render(
+      <MemoryRouter>
+        <IncidentListPage />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Needs attention")).toBeInTheDocument();
+    expect(screen.getByText("Critical severity")).toBeInTheDocument();
+    expect(screen.getByText(/of 1 loaded/)).toBeInTheDocument();
+  });
+
+  it("sorts oldest first on request", async () => {
+    const older = { ...incidentFixture, id: "INC-OLD", started_at: "2026-09-05T12:00:00Z" };
+    listMock.mockResolvedValue(page([incidentFixture, older], 2));
+    render(
+      <MemoryRouter>
+        <IncidentListPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText("INC-A1B2C3D4E5F60708");
+    await userEvent.selectOptions(screen.getByLabelText("Sort"), "started_asc");
+    const rows = screen.getAllByRole("row");
+    // Header row first, then the older incident.
+    expect(rows[1]?.textContent).toContain("INC-OLD");
+  });
+
+  it("filters by severity on the client", async () => {
+    listMock.mockResolvedValue(page());
+    render(
+      <MemoryRouter>
+        <IncidentListPage />
+      </MemoryRouter>,
+    );
+    await screen.findByText("INC-A1B2C3D4E5F60708");
+    await userEvent.selectOptions(screen.getByLabelText("Severity"), "critical");
+    expect(screen.getByText("No incidents match this filter.")).toBeInTheDocument();
+  });
 });

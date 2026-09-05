@@ -225,4 +225,27 @@ describe("IncidentDetailPage", () => {
     expect(await screen.findByText("unavailable")).toBeInTheDocument();
     expect(screen.getByText(/Missing data is not proof/)).toBeInTheDocument();
   });
+
+  it("shows a summary grid with duration, window, and version", async () => {
+    renderDetail();
+    expect(await screen.findByText("Investigation window")).toBeInTheDocument();
+    expect(screen.getByText("ongoing")).toBeInTheDocument();
+    expect(screen.getByText("v3")).toBeInTheDocument();
+  });
+
+  it("shows an em dash for corrupt durations instead of claiming ongoing", async () => {
+    mocks.getIncident.mockResolvedValue({
+      ...incidentFixture,
+      completed_at: "2026-09-06T11:00:00Z",
+    });
+    renderDetail();
+    await screen.findByText("Investigation window");
+    expect(screen.queryByText("ongoing")).not.toBeInTheDocument();
+  });
+
+  it("renders evidence as a table with copyable IDs", async () => {
+    renderDetail();
+    expect(await screen.findByRole("columnheader", { name: "Evidence" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy incident ID" })).toBeInTheDocument();
+  });
 });

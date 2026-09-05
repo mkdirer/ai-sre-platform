@@ -1,8 +1,10 @@
 export function Loading({ label }: { label: string }) {
   return (
-    <p role="status" aria-live="polite">
-      {label}…
-    </p>
+    <div className="loading-block" role="status" aria-live="polite" aria-busy="true">
+      <p className="meta">{label}…</p>
+      <div className="loading-bar" aria-hidden="true" />
+      <div className="loading-bar short" aria-hidden="true" />
+    </div>
   );
 }
 

@@ -13,7 +13,15 @@ import {
   type Recommendation,
   type TimelineEvent,
 } from "../api/types";
-import { ConfidenceBadge, SeverityBadge, StatusBadge } from "../components/StatusBadge";
+import { Mono } from "../components/Code";
+import {
+  AuditTimelineList,
+  EvidenceTimelineList,
+  EvidenceTable,
+  HypothesisCard,
+  KnowledgeList,
+  SummaryFacts,
+} from "../components/incident";
 import { EmptyState, ErrorAlert, Loading, StaleAlert } from "../components/States";
 
 interface DetailData {
@@ -31,11 +39,6 @@ interface DetailData {
 const ACTOR_STORAGE_KEY = "sre-approver-actor";
 const DEFAULT_ACTOR =
   (import.meta.env.VITE_APPROVAL_ACTOR as string | undefined) ?? "local-demo-approver";
-
-function formatTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
 
 export function IncidentDetailPage() {
   const { incidentId = "" } = useParams();
@@ -196,16 +199,10 @@ export function IncidentDetailPage() {
         <Link to="/">← Back to incidents</Link>
       </p>
       <section aria-labelledby="incident-title">
-        <h1 id="incident-title">{incident.title}</h1>
-        <p>
-          <span className="meta">{incident.id}</span> <StatusBadge status={incident.status} />{" "}
-          <SeverityBadge severity={incident.severity} />{" "}
-          <ConfidenceBadge status={incident.status} confidence={incident.confidence} />
-        </p>
-        <p className="meta">
-          Service {incident.service} · Started {formatTime(incident.started_at)} · Version{" "}
-          {incident.version} · Occurrences {incident.occurrence_count}
-        </p>
+        <div className="page-head">
+          <h1 id="incident-title">{incident.title}</h1>
+        </div>
+        <SummaryFacts incident={incident} />
       </section>
 
       {stale ? <StaleAlert message={stale} onRefresh={() => void load()} /> : null}
@@ -216,21 +213,37 @@ export function IncidentDetailPage() {
         </div>
       ) : null}
 
-      <section aria-labelledby="rca-title">
-        <h2 id="rca-title">Root cause analysis</h2>
+      <section aria-labelledby="rca-title" className="panel">
+        <div className="panel-head">
+          <h2 id="rca-title">AI root cause analysis</h2>
+          {report ? (
+            <span className="meta num">confidence {(report.confidence * 100).toFixed(0)}%</span>
+          ) : null}
+        </div>
         {report === null ? (
           <EmptyState message="No investigation report exists yet. Evidence below reflects the current collection state." />
         ) : showRca ? (
-          <div className="card">
+          <div>
             <h3>
-              {report.root_cause?.replaceAll("_", " ")} · confidence{" "}
-              {(report.confidence * 100).toFixed(0)}%
+              <Mono>{report.root_cause?.replaceAll("_", " ")}</Mono>
             </h3>
             <p>{report.root_cause_summary}</p>
             <p className="meta">{report.summary}</p>
+            {report.evidence_references.length > 0 ? (
+              <>
+                <p className="meta">Cited evidence (current telemetry, not history):</p>
+                <ul className="evidence-ids" aria-label="Cited evidence">
+                  {report.evidence_references.map((id) => (
+                    <li key={id}>
+                      <Mono>{id}</Mono>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
           </div>
         ) : (
-          <div className="card">
+          <div>
             <h3>Insufficient evidence</h3>
             <p>
               No verified hypothesis met the evidence threshold, so no root cause is claimed.
@@ -238,7 +251,7 @@ export function IncidentDetailPage() {
           </div>
         )}
         {report !== null && report.limitations.length > 0 ? (
-          <div className="card">
+          <div>
             <h3>Data gaps</h3>
             <ul>
               {report.limitations.map((gap) => (
@@ -249,21 +262,28 @@ export function IncidentDetailPage() {
         ) : null}
       </section>
 
-      <section aria-labelledby="recommendations-title">
-        <h2 id="recommendations-title">Recommendations</h2>
+      <section aria-labelledby="recommendations-title" className="panel">
+        <div className="panel-head">
+          <h2 id="recommendations-title">Recommendations</h2>
+          <span className="meta num">{data.recommendations.length}</span>
+        </div>
         {data.recommendations.length === 0 ? (
           <EmptyState message="No recommendations were proposed for this incident." />
         ) : null}
         {data.recommendations.map((recommendation) => (
-          <div className="card" key={recommendation.id}>
+          <article className="item" key={recommendation.id}>
             <h3>
               {recommendation.action_type.replaceAll("_", " ")} on {recommendation.target}
             </h3>
             <p>
-              <span className={`badge badge-${recommendation.risk === "low" ? "good" : recommendation.risk === "medium" ? "warning" : "bad"}`}>
+              <span
+                className={`badge badge-${recommendation.risk === "low" ? "good" : recommendation.risk === "medium" ? "warning" : "bad"}`}
+              >
                 {recommendation.risk} risk
               </span>
-              <span className="badge badge-neutral">{recommendation.status.replaceAll("_", " ")}</span>
+              <span className="badge badge-neutral">
+                {recommendation.status.replaceAll("_", " ")}
+              </span>
               {recommendation.reversible ? (
                 <span className="badge badge-neutral">reversible</span>
               ) : (
@@ -291,7 +311,7 @@ export function IncidentDetailPage() {
                   maxLength={64}
                   onChange={(event) => setActor(event.target.value)}
                 />
-                <div style={{ marginTop: "0.5rem" }}>
+                <div className="form-actions">
                   <button
                     type="button"
                     disabled={decisionPending === recommendation.id}
@@ -301,7 +321,7 @@ export function IncidentDetailPage() {
                   </button>
                   <button
                     type="button"
-                    className="secondary"
+                    className="danger"
                     disabled={decisionPending === recommendation.id}
                     onClick={() => void decide(recommendation, "reject")}
                   >
@@ -322,150 +342,53 @@ export function IncidentDetailPage() {
                     : "Not awaiting approval, so no decision controls are shown."}
               </p>
             )}
-          </div>
+          </article>
         ))}
       </section>
 
-      <section aria-labelledby="hypotheses-title">
-        <h2 id="hypotheses-title">Competing hypotheses</h2>
+      <section aria-labelledby="hypotheses-title" className="panel">
+        <div className="panel-head">
+          <h2 id="hypotheses-title">Competing hypotheses</h2>
+          <span className="meta num">{data.hypotheses.length}</span>
+        </div>
         {data.hypotheses.length === 0 ? (
           <EmptyState message="No hypotheses were recorded for this incident." />
         ) : null}
         {data.hypotheses.map((hypothesis) => (
-          <div className="card" key={hypothesis.id}>
-            <h3>
-              {hypothesis.category.replaceAll("_", " ")} · {hypothesis.status} · confidence{" "}
-              {(hypothesis.confidence * 100).toFixed(0)}%
-            </h3>
-            <p>{hypothesis.description}</p>
-            <p>{hypothesis.reasoning_summary}</p>
-            <p className="meta">
-              Supporting: {hypothesis.supporting_evidence_ids.join(", ") || "none"} ·
-              Contradicting: {hypothesis.contradicting_evidence_ids.join(", ") || "none"}
-            </p>
-            {hypothesis.status === "rejected" ? (
-              <p className="meta">
-                Rejected: contradicted by current telemetry or lacking support. Historical
-                similarity alone never sustains a hypothesis.
-              </p>
-            ) : null}
-          </div>
+          <HypothesisCard key={hypothesis.id} hypothesis={hypothesis} />
         ))}
       </section>
 
-      <section aria-labelledby="evidence-title">
-        <h2 id="evidence-title">Evidence</h2>
-        {data.evidence.length === 0 ? (
-          <EmptyState message="No evidence has been collected for this incident yet." />
-        ) : null}
-        {data.evidence.map((item) => (
-          <div className="card" key={item.id}>
-            <h3>
-              {item.id} · {item.source} / {item.query_template}
-            </h3>
-            <p>
-              <span
-                className={`badge ${
-                  item.status === "collected"
-                    ? "badge-good"
-                    : item.status === "empty"
-                      ? "badge-neutral"
-                      : "badge-bad"
-                }`}
-              >
-                {item.status.replaceAll("_", " ")}
-              </span>
-              <span className="meta">{formatTime(item.observed_at)}</span>
-            </p>
-            <p>{item.summary}</p>
-            {item.status === "collected" || item.status === "empty" ? null : (
-              <p className="meta">
-                Source unavailable or failed{item.error_type ? `: ${item.error_type}` : ""}.
-                {item.error_message ? ` ${item.error_message}` : ""} Missing data is not proof
-                that an event did not occur.
-              </p>
-            )}
-            <details>
-              <summary>Provenance</summary>
-              <pre className="meta">
-                {JSON.stringify(
-                  {
-                    provenance: item.provenance,
-                    query_parameters: item.query_parameters,
-                    payload_sha256: item.payload_sha256,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </details>
-          </div>
-        ))}
+      <section aria-labelledby="evidence-title" className="panel">
+        <div className="panel-head">
+          <h2 id="evidence-title">Evidence</h2>
+          <span className="meta num">{data.evidence.length}</span>
+        </div>
+        <EvidenceTable items={data.evidence} />
       </section>
 
-      <section aria-labelledby="knowledge-title">
-        <h2 id="knowledge-title">Related knowledge</h2>
-        {data.knowledge.length === 0 && !data.knowledgeUnavailable ? (
-          <EmptyState message="No historical context was retrieved for this incident." />
-        ) : null}
-        {data.knowledgeUnavailable ? (
-          <p className="meta">
-            Some referenced knowledge chunks could not be loaded; citations below are partial.
-          </p>
-        ) : null}
-        {data.knowledge.map((chunk) => (
-          <div className="card" key={chunk.id}>
-            <h3>
-              {chunk.id} · {chunk.doc_type} · {chunk.source_path}
-            </h3>
-            <p>{chunk.text}</p>
-            <p className="meta">
-              Historical context only — similarity to past incidents never proves the current
-              root cause.
-            </p>
-          </div>
-        ))}
+      <section aria-labelledby="knowledge-title" className="panel">
+        <div className="panel-head">
+          <h2 id="knowledge-title">Related knowledge</h2>
+          <span className="meta">history, not proof</span>
+        </div>
+        <KnowledgeList chunks={data.knowledge} unavailable={data.knowledgeUnavailable} />
       </section>
 
-      <section aria-labelledby="timeline-title">
-        <h2 id="timeline-title">Correlated timeline</h2>
-        {data.evidenceTimeline.length === 0 ? (
-          <EmptyState message="The evidence timeline is empty." />
-        ) : (
-          <ol>
-            {data.evidenceTimeline.map((event) => (
-              <li key={event.id}>
-                <span className="meta">{formatTime(event.timestamp)} · </span>
-                {event.summary}{" "}
-                <span className="meta">
-                  ({event.source}, {event.evidence_id})
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
+      <section aria-labelledby="timeline-title" className="panel">
+        <div className="panel-head">
+          <h2 id="timeline-title">Correlated timeline</h2>
+          <span className="meta num">{data.evidenceTimeline.length}</span>
+        </div>
+        <EvidenceTimelineList events={data.evidenceTimeline} />
       </section>
 
-      <section aria-labelledby="audit-title">
-        <h2 id="audit-title">Audit status</h2>
-        {data.audit.length === 0 ? (
-          <EmptyState message="No audit events are recorded yet." />
-        ) : (
-          <ol>
-            {data.audit.map((event) => (
-              <li key={event.id}>
-                <span className="meta">{formatTime(event.created_at)} · </span>
-                {event.event_type} by {event.actor}
-                {event.from_status || event.to_status ? (
-                  <span className="meta">
-                    {" "}
-                    ({event.from_status ?? "—"} → {event.to_status ?? "—"})
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ol>
-        )}
+      <section aria-labelledby="audit-title" className="panel">
+        <div className="panel-head">
+          <h2 id="audit-title">Audit status</h2>
+          <span className="meta num">{data.audit.length}</span>
+        </div>
+        <AuditTimelineList events={data.audit} />
       </section>
     </div>
   );
