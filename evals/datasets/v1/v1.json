@@ -1,5 +1,0 @@
-{
-  "dataset_version": "v1",
-  "schema_version": "1.0",
-  "scenarios": ["SCN-001", "SCN-002", "SCN-003", "SCN-004", "SCN-005", "SCN-006", "SCN-007"]
-}

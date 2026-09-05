@@ -1,5 +1,9 @@
-# Markdown files
+# Markdown files:
 *.md
+!/README.md
+
+# Eval dataset manifests mirror the local-only datasets above.
+evals/datasets/
 
 # Environment variables and secrets
 .env
